@@ -1,0 +1,280 @@
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+
+import httpx
+import pymupdf
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.main import Metadata, AIRequest, create_app
+from backend.app.store import Store
+from backend.app.importer import official_url, fetch_pdf
+from backend.app.ai import generate
+from backend.app.retrieval import Retrieval
+from backend.app.index_cli import synchronize
+from tests.fixtures.embedding import TestEmbedder
+
+
+def pdf(*pages):
+    with pymupdf.open() as document:
+        for content in pages:
+            page = document.new_page()
+            page.insert_text((40,40),content)
+        return document.tobytes()
+
+
+@pytest.fixture
+def client(tmp_path,monkeypatch):
+    monkeypatch.setenv('COPILOT_ORG_TOKENS',json.dumps({'alpha':'alpha-secret','beta':'beta-secret'}))
+    app = create_app(str(tmp_path/'test.sqlite'))
+    # Synthetic fixtures are explicitly enabled only on this isolated test store.
+    app.state.store.allow_synthetic = True
+    app.state.retrieval = Retrieval(app.state.store, tmp_path/'chroma', TestEmbedder())
+    with TestClient(app) as c:
+        c.headers['Authorization']='Bearer alpha-secret'
+        yield c
+
+
+def upload(client,content=None,**meta):
+    metadata={'title':'SYNTHETIC test regulation','kind':'regulatory','regulator':'RBI',**meta}
+    response = client.post('/api/documents/upload', files={'file':('fixture.pdf',content or pdf('SYNTHETIC test rule: record the demo identifier.','SYNTHETIC page two: review the demo register.'),'application/pdf')},data={'metadata':json.dumps(metadata)})
+    if response.status_code == 201:
+        synchronize(client.app.state.retrieval)
+    return response
+
+
+def test_empty_and_auth(client):
+    assert client.get('/api/documents').json()['regulatory_empty']
+    assert client.get('/api/documents',headers={'Authorization':'Bearer wrong'}).status_code==401
+    assert client.post('/api/ai',json={'task':'qa','question':'demo','document_ids':[]}).status_code==422
+
+
+def test_metadata_pages_citations_and_persistence(client):
+    data=pdf('SYNTHETIC page one: retain demo record.','SYNTHETIC page two: review demo record.')
+    response=upload(client,data,version='demo-1')
+    assert response.status_code==201,response.text
+    doc=response.json()
+    assert doc['content_hash']==hashlib.sha256(data).hexdigest()
+    assert doc['metadata']['title']['status']=='user_supplied'
+    assert doc['metadata']['publication_date']=={'value':None,'status':'unknown'}
+    assert doc['metadata']['version']['value']=='demo-1'
+    chunks=client.get(f"/api/documents/{doc['id']}/chunks").json()
+    assert [c['page'] for c in chunks]==[1,2]
+    assert chunks==client.get(f"/api/documents/{doc['id']}/chunks").json()
+    valid=client.post('/api/citations/validate',json={'chunk_id':chunks[1]['id'],'quote':'review demo record.'})
+    assert valid.status_code==200 and valid.json()['page']==2
+    assert client.post('/api/citations/validate',json={'chunk_id':chunks[1]['id'],'quote':'invented quote'}).status_code==422
+    assert client.get(f"/api/documents/{doc['id']}/pdf").content==data
+    store=client.app.state.store
+    reopened=Store(store.engine.url.database,allow_synthetic=True)
+    assert reopened.get(doc['id'],'alpha')['content_hash']==doc['content_hash']
+
+
+def test_versions_compare_and_duplicates(client):
+    data=pdf('SYNTHETIC earlier: retain identifier.')
+    old=upload(client,data).json()
+    new=upload(client,pdf('SYNTHETIC later: retain identifier and demo review date.'),family_id=old['family_id'],version='demo-2').json()
+    assert old['id']!=new['id']
+    assert len(client.get('/api/documents').json()['documents'])==2
+    comparison=client.get('/api/compare',params={'old':old['id'],'new':new['id']})
+    assert comparison.status_code==200
+    assert '+SYNTHETIC later:' in comparison.json()['diff']
+    assert upload(client,data,family_id=old['family_id']).status_code==422
+    assert client.get('/api/compare',params={'old':old['id'],'new':old['id']}).status_code==422
+    assert upload(client,family_id='does-not-exist').status_code==422
+    assert upload(client,family_id=old['family_id'],regulator='SEBI').status_code==422
+
+
+def test_organization_isolation(client):
+    doc=upload(client,kind='internal',regulator=None).json()
+    chunks=client.get(f"/api/documents/{doc['id']}/chunks").json()
+    client.headers['Authorization']='Bearer beta-secret'
+    assert client.get('/api/documents').json()['documents']==[]
+    for suffix in ['pdf','chunks']:
+        assert client.get(f"/api/documents/{doc['id']}/{suffix}").status_code==404
+    assert client.post('/api/citations/validate',json={'chunk_id':chunks[0]['id'],'quote':chunks[0]['content']}).status_code==404
+    assert upload(client,kind='internal',regulator=None,family_id=doc['family_id']).status_code==422
+    assert client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[doc['id']]}).status_code==404
+
+
+def test_invalid_pdf_and_ocr(client):
+    assert upload(client,b'not a pdf').status_code==422
+    assert upload(client,pdf('')).status_code==422
+    assert upload(client,b'%PDF-broken').status_code==422
+    assert upload(client,publication_date='not-date').status_code==422
+
+
+def test_production_rejects_synthetic(tmp_path):
+    store=Store(tmp_path/'production.sqlite')
+    with pytest.raises(ValueError,match='Synthetic'):
+        store.ingest(Path('tests/fixtures/synthetic_kyc_sop.pdf').read_bytes(),Metadata(title='SYNTHETIC SOP',kind='internal'), 'alpha')
+    assert store.list('alpha')==[]
+
+
+@pytest.mark.parametrize('url',['http://www.rbi.org.in/a.pdf','https://rbi.org.in.evil.example/a.pdf','https://127.0.0.1/a.pdf','https://evil.example/a.pdf','https://www.sebi.gov.in:8080/a.pdf','https://user@www.sebi.gov.in/a.pdf','https://www.sebi.gov.in/a.pdf#page=1'])
+def test_restricted_urls(url):
+    with pytest.raises(ValueError): official_url(url)
+
+
+def test_official_host_validation():
+    assert official_url('https://rbidocs.rbi.org.in/a.pdf')=='RBI'
+    assert official_url('https://www.sebi.gov.in/a.pdf')=='SEBI'
+
+
+@pytest.mark.parametrize('status,content_type,expected',[(302,'application/pdf','Redirect'),(403,'text/html','HTTP 403'),(200,'text/html','not served')])
+def test_import_restrictions(monkeypatch,status,content_type,expected):
+    import backend.app.importer as module
+    original=httpx.AsyncClient
+    transport=httpx.MockTransport(lambda request:httpx.Response(status,headers={'Content-Type':content_type},content=b'blocked'))
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kwargs:original(transport=transport,**kwargs))
+    with pytest.raises(ValueError,match=expected): asyncio.run(fetch_pdf('https://www.sebi.gov.in/a.pdf'))
+
+
+def test_import_verified_source_only(client,monkeypatch):
+    import backend.app.main as module
+    async def fake_fetch(url): return pdf('SYNTHETIC official-source transport fixture.'),'SEBI'
+    monkeypatch.setattr(module,'fetch_pdf',fake_fetch)
+    response=client.post('/api/documents/import',json={'url':'https://www.sebi.gov.in/a.pdf','metadata':{'title':'SYNTHETIC import fixture','kind':'regulatory','regulator':'SEBI','publication_date':'2024-01-01'}})
+    assert response.status_code==201
+    meta=response.json()['metadata']
+    assert meta['source_url']['status']=='verified'
+    assert meta['regulator']['status']=='verified'
+    assert meta['publication_date']['status']=='user_supplied'
+    assert meta['title']['status']=='user_supplied'
+
+
+def test_ai_grounding_and_no_fake_fallback(client,monkeypatch):
+    import backend.app.ai as module
+    doc=upload(client).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    original=httpx.AsyncClient
+    def response(payload):
+        return httpx.MockTransport(lambda request:httpx.Response(200,json={'message':{'content':json.dumps(payload)}}))
+    valid={'items':[{'statement':'SYNTHETIC fixture interpretation','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]}
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=response(valid),**kw))
+    body={'task':'qa','question':'record demo identifier','document_ids':[doc['id']]}
+    result=client.post('/api/ai',json=body)
+    assert result.status_code==200 and result.json()['items'][0]['review_status']=='pending_human_review'
+    invalid={'items':[{'statement':'fixture','citations':[{'chunk_id':chunk['id'],'quote':'fabricated'}]}]}
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=response(invalid),**kw))
+    assert client.post('/api/ai',json=body).status_code==503
+    def unavailable(request): raise httpx.ConnectError('offline')
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(unavailable),**kw))
+    result=client.post('/api/ai',json=body)
+    assert result.status_code==503 and 'ollama pull' in result.json()['detail']
+
+
+def test_import_stream_success_and_size_limit(monkeypatch):
+    import backend.app.importer as module
+    original=httpx.AsyncClient
+    data=pdf('SYNTHETIC streaming transport fixture')
+    transport=httpx.MockTransport(lambda request:httpx.Response(200,headers={'content-type':'application/pdf'},content=data))
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kwargs:original(transport=transport,**kwargs))
+    content,regulator=asyncio.run(fetch_pdf('https://www.rbi.org.in/a.pdf'))
+    assert content==data and regulator=='RBI'
+    transport=httpx.MockTransport(lambda request:httpx.Response(200,headers={'content-type':'application/pdf'},content=b'x'*(20*1024*1024+1)))
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kwargs:original(transport=transport,**kwargs))
+    with pytest.raises(ValueError,match='20 MiB'): asyncio.run(fetch_pdf('https://www.rbi.org.in/a.pdf'))
+
+
+def test_chunk_offsets_do_not_cross_pages(client):
+    data=pdf('SYNTHETIC\n'+'demo line evidence\n'*100,'SYNTHETIC second page evidence')
+    doc=upload(client,data).json()
+    chunks=client.get(f"/api/documents/{doc['id']}/chunks").json()
+    with pymupdf.open(stream=data,filetype='pdf') as document:
+        pages=[p.get_text('text',sort=True) for p in document]
+    assert len(chunks)>2
+    for c in chunks:
+        assert c['content']==pages[c['page']-1][c['start_offset']:c['end_offset']]
+
+
+@pytest.mark.parametrize('task',['comparison','gap_analysis','checklist'])
+def test_remaining_ai_workflows(client,monkeypatch,task):
+    import backend.app.ai as module
+    first=upload(client).json()
+    if task=='comparison':
+        second=upload(client,pdf('SYNTHETIC changed regulation evidence.'),family_id=first['family_id']).json()
+    elif task=='gap_analysis':
+        second=upload(client,Path('tests/fixtures/synthetic_kyc_sop.pdf').read_bytes(),kind='internal',regulator=None).json()
+    else: second=None
+    ids=[first['id']]+([second['id']] if second else [])
+    citations=[]
+    for identifier in ids:
+        chunk=client.get(f'/api/documents/{identifier}/chunks').json()[0]
+        citations.append({'chunk_id':chunk['id'],'quote':chunk['content']})
+    original=httpx.AsyncClient
+    payload={'items':[{'statement':'SYNTHETIC deterministic workflow fixture','assessment':'INSUFFICIENT_EVIDENCE','citations':citations}]}
+    transport=httpx.MockTransport(lambda request:httpx.Response(200,json={'message':{'content':json.dumps(payload)}}))
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=transport,**kw))
+    response=client.post('/api/ai',json={'task':task,'question':'review demo evidence','document_ids':ids})
+    assert response.status_code==200,response.text
+    assert len(response.json()['items'][0]['citations'])==len(ids)
+    if second:
+        payload['items'][0]['citations']=citations[:1]
+        assert client.post('/api/ai',json={'task':task,'question':'demo','document_ids':ids}).status_code==503
+
+
+def test_production_accepts_real_terminology(tmp_path):
+    store=Store(tmp_path/'production.sqlite')
+    # This remains a synthetic test fixture: it verifies that the ordinary term
+    # "synthetic" in financial text is not confused with the demo watermark.
+    document=store.ingest(pdf('The term synthetic instrument appears in this test excerpt.'),Metadata(title='Test terminology',kind='regulatory',regulator='RBI'),'alpha')
+    assert document['id']
+
+
+@pytest.mark.parametrize('mode',['ready','missing','offline'])
+def test_health_and_interface(client,monkeypatch,mode):
+    import backend.app.main as module
+    original=httpx.AsyncClient
+    def respond(request):
+        if mode=='offline': raise httpx.ConnectError('offline')
+        return httpx.Response(200,json={'models':[{'name':'qwen3:8b'}] if mode=='ready' else []})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+    result=client.get('/api/health')
+    assert result.status_code==200
+    assert result.json()['ollama']=={'ready':'ready','missing':'model_missing','offline':'unavailable'}[mode]
+    assert client.get('/').status_code==200
+
+
+def test_search_api_filters_status_and_pending(client):
+    assert client.get('/api/retrieval/status').json()['state']=='empty'
+    doc=upload(client,document_type='direction',version='demo-v1').json()
+    body={'query':'record','mode':'hybrid','filters':{'document_ids':[doc['id']],'version':'demo-v1','regulator':'RBI','document_type':'direction'}}
+    result=client.post('/api/retrieval/search',json=body)
+    assert result.status_code==200 and result.json()['results'][0]['page']==1
+    assert client.get('/api/retrieval/status').json()['state']=='ready'
+    assert client.post('/api/retrieval/search',json={**body,'limit':1000}).status_code==422
+    pending=client.app.state.store.ingest(pdf('SYNTHETIC pending document'),Metadata(title='SYNTHETIC pending',kind='regulatory',regulator='RBI'),'alpha')
+    assert client.get('/api/retrieval/status').json()['state']=='pending'
+    generation=client.post('/api/ai',json={'task':'qa','question':'pending','document_ids':[pending['id']]})
+    assert generation.status_code==503 and 'sync' in generation.json()['detail']
+    assert client.post('/api/retrieval/search',json={'query':'pending','mode':'bm25','filters':{'document_ids':[pending['id']]}}).status_code==200
+
+
+def test_search_and_generation_cannot_use_foreign_policy(client,monkeypatch):
+    private=upload(client,kind='internal',regulator=None).json()
+    reg=upload(client).json()
+    client.headers['Authorization']='Bearer beta-secret'
+    result=client.post('/api/retrieval/search',json={'query':'record','mode':'hybrid'})
+    assert {c['document_id'] for c in result.json()['results']}=={reg['id']}
+    assert client.post('/api/retrieval/search',json={'query':'record','filters':{'document_ids':[private['id']]}}).status_code==404
+    assert client.post('/api/ai',json={'task':'gap_analysis','question':'review','document_ids':[reg['id'],private['id']]}).status_code==404
+
+
+@pytest.mark.parametrize('assessment',['CERTIFIED_COMPLIANT',None,[],{}])
+def test_invalid_assessment_rejected(client,monkeypatch,assessment):
+    import backend.app.ai as module
+    reg=upload(client).json()
+    policy=upload(client,kind='internal',regulator=None).json()
+    citations=[]
+    for document in [reg,policy]:
+        chunk=client.get(f"/api/documents/{document['id']}/chunks").json()[0]
+        citations.append({'chunk_id':chunk['id'],'quote':chunk['content']})
+    original=httpx.AsyncClient
+    payload={'items':[{'statement':'SYNTHETIC fixture','assessment':assessment,'citations':citations}]}
+    transport=httpx.MockTransport(lambda request:httpx.Response(200,json={'message':{'content':json.dumps(payload)}}))
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=transport,**kw))
+    response=client.post('/api/ai',json={'task':'gap_analysis','question':'review','document_ids':[reg['id'],policy['id']]})
+    assert response.status_code==503 and 'assessment' in response.json()['detail']

@@ -1,0 +1,16 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.4
+SQLAlchemy==2.0.40
+PyMuPDF==1.25.5
+httpx==0.28.1
+python-multipart==0.0.20
+pytest==8.3.5
+rank-bm25==0.2.2
+chromadb==1.0.20
+sentence-transformers==5.1.0
+transformers==4.56.2
+huggingface-hub==0.34.4
+numpy==2.2.6
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0+cpu

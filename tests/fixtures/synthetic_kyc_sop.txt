@@ -1,0 +1,9 @@
+SYNTHETIC KYC SOP — DEVELOPMENT AND DEMONSTRATION ONLY
+Fictional Example Organization. Version demo-1. Not a real company policy.
+Not RBI/SEBI guidance; no statement here describes an actual legal obligation.
+
+1. A demonstration onboarding operator records the fictional customer's name.
+2. The operator logs the sample identity-review decision in a demo register.
+3. A demonstration reviewer checks the register and records follow-up actions.
+4. Unresolved sample records are escalated to the fictional demo team lead.
+5. Review cadence and retention duration are intentionally unspecified for tests.
