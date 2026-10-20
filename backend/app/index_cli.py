@@ -1,9 +1,12 @@
 """Local administrator tooling. No index writes or downloads at app startup."""
 import argparse
-import fcntl
+import errno
 import json
 import os
+import sys
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import text
@@ -11,10 +14,44 @@ from .retrieval import Retrieval, RetrievalError, inventory
 from .store import Store
 
 
+@contextmanager
+def writer_lock(path):
+    """Hold an exclusive cross-process lock on the index writer file."""
+    with path.open('a+b') as lock:
+        if sys.platform == 'win32':
+            import msvcrt
+
+            lock.seek(0, os.SEEK_END)
+            if lock.tell() == 0:
+                lock.write(b'\0')
+                lock.flush()
+            while True:
+                lock.seek(0)
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EDEADLK, errno.EAGAIN):
+                        raise
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def synchronize(retrieval, rebuild=False):
     retrieval.path.mkdir(parents=True, exist_ok=True)
-    with (retrieval.path/'writer.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with writer_lock(retrieval.path/'writer.lock'):
         config = retrieval.config()
         old = None
         if (retrieval.path/'manifest.json').exists():

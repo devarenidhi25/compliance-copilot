@@ -1,4 +1,6 @@
 import json
+import multiprocessing
+import time
 import pytest
 from backend.app.main import Metadata
 from backend.app.store import Store
@@ -8,6 +10,13 @@ from tests.test_pipeline import pdf
 
 
 from tests.fixtures.embedding import TestEmbedder
+
+
+def hold_writer_lock(path, acquired, release):
+    from backend.app.index_cli import writer_lock
+    with writer_lock(path):
+        acquired.set()
+        release.wait(10)
 
 
 @pytest.fixture
@@ -35,6 +44,28 @@ def test_rrf_deduplicates_and_ties():
     assert len(ranking)==3
     assert dict(ranking)['a']==pytest.approx(1/61+1/63)
     assert rrf(['b'],['a'])==[('a',1/61),('b',1/61)]
+
+
+def test_writer_lock_excludes_other_processes(tmp_path):
+    from backend.app.index_cli import writer_lock
+    path=tmp_path/'writer.lock'
+    acquired=multiprocessing.Event()
+    release=multiprocessing.Event()
+    process=multiprocessing.Process(target=hold_writer_lock,args=(path,acquired,release))
+    process.start()
+    try:
+        assert acquired.wait(5)
+        started=time.monotonic()
+        with writer_lock(path):
+            assert time.monotonic()-started >= 0.1
+        release.set()
+        process.join(5)
+        assert process.exitcode==0
+    finally:
+        release.set()
+        if process.is_alive():
+            process.terminate()
+            process.join()
 
 
 def test_empty_and_missing_model(retrieval,tmp_path):

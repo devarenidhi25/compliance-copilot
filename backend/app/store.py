@@ -20,7 +20,7 @@ SCHEMA = [
     '''CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id),
     page INTEGER NOT NULL, start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
-    content TEXT NOT NULL)''',
+    content TEXT NOT NULL, section TEXT)''',
 ]
 
 
@@ -32,6 +32,9 @@ class Store:
         with self.engine.begin() as conn:
             for statement in SCHEMA:
                 conn.execute(text(statement))
+            columns = {row[1] for row in conn.execute(text('PRAGMA table_info(chunks)'))}
+            if 'section' not in columns:
+                conn.execute(text('ALTER TABLE chunks ADD COLUMN section TEXT'))
 
     def list(self, organization):
         with self.engine.connect() as conn:
@@ -58,7 +61,7 @@ class Store:
                 raise LookupError('Document not found')
             return dict(row)
 
-    def ingest(self, data, metadata, organization, verified_source=None):
+    def ingest(self, data, metadata, organization, verified_source=None, source_metadata=None):
         if len(data) > 20 * 1024 * 1024:
             raise ValueError('PDF exceeds 20 MiB limit')
         if not data.startswith(b'%PDF-'):
@@ -76,6 +79,26 @@ class Store:
             raise ValueError('Extracted text exceeds limit')
         if not self.allow_synthetic and (metadata.title.upper().startswith('SYNTHETIC') or any('SYNTHETIC KYC SOP' in p.upper() or 'SYNTHETIC DEMONSTRATION ONLY' in p.upper() for p in pages)):
             raise ValueError('Synthetic documents belong in the isolated test/demo database')
+        return self._store_extracted(data, metadata, organization, pages, verified_source, source_metadata)
+
+    def ingest_html(self, data, metadata, organization, sections, verified_source=None, source_metadata=None):
+        if len(data) > 20 * 1024 * 1024:
+            raise ValueError('HTML document exceeds 20 MiB limit')
+        sections = [(str(title or '').strip(), str(content or '').strip()) for title, content in sections]
+        sections = [(title, content) for title, content in sections if content]
+        if not sections:
+            raise ValueError('HTML document contains no extractable text')
+        if sum(len(title) + len(content) for title, content in sections) > 10_000_000:
+            raise ValueError('Extracted text exceeds limit')
+        pages = [f'{title}\n{content}' if title else content for title, content in sections]
+        return self._store_extracted(data, metadata, organization, pages, verified_source,
+                                     {**(source_metadata or {}), 'original_format':'html'},
+                                     section_names=[title or f'Section {i+1}' for i, (title, _) in enumerate(sections)])
+
+    def _store_extracted(self, data, metadata, organization, pages, verified_source=None,
+                         source_metadata=None, section_names=None):
+        if not self.allow_synthetic and (metadata.title.upper().startswith('SYNTHETIC') or any('SYNTHETIC KYC SOP' in p.upper() or 'SYNTHETIC DEMONSTRATION ONLY' in p.upper() for p in pages)):
+            raise ValueError('Synthetic documents belong in the isolated test/demo database')
         doc_id = str(uuid.uuid4())
         family_id = metadata.family_id or str(uuid.uuid4())
         scope = organization if metadata.kind == 'internal' else None
@@ -83,6 +106,11 @@ class Store:
         for key in ['title', 'regulator', 'document_type', 'source_url', 'publication_date', 'version', 'effective_date']:
             value = getattr(metadata, key)
             fields[key] = {'value': str(value) if value is not None else None, 'status': 'user_supplied' if value is not None else 'unknown'}
+        for key, value in (source_metadata or {}).items():
+            fields[key] = {'value': value, 'status': 'verified' if value is not None else 'unknown'}
+        fields.setdefault('original_format', {'value':'pdf', 'status':'verified'})
+        fields.setdefault('ingestion_status', {'value':'stored', 'status':'verified'})
+        fields.setdefault('extraction_status', {'value':'complete', 'status':'verified'})
         if verified_source:
             fields['source_url'] = {'value': verified_source, 'status': 'verified', 'verification': 'Fetched over HTTPS from an allowlisted official host'}
             fields['regulator'] = {'value': metadata.regulator, 'status': 'verified', 'verification': 'Official source host; document applicability requires human review'}
@@ -102,7 +130,8 @@ class Store:
                 for start in range(0, len(content), 1000):
                     chunk = content[start:start+1200]
                     chunk_id = str(uuid.uuid5(uuid.UUID(doc_id), f'{number}:{start}'))
-                    conn.execute(text('INSERT INTO chunks VALUES (:cid,:id,:page,:start,:end,:content)'), {'cid':chunk_id,'id':doc_id,'page':number,'start':start,'end':start+len(chunk),'content':chunk})
+                    section = section_names[number-1] if section_names else None
+                    conn.execute(text('INSERT INTO chunks (id,document_id,page,start_offset,end_offset,content,section) VALUES (:cid,:id,:page,:start,:end,:content,:section)'), {'cid':chunk_id,'id':doc_id,'page':number,'start':start,'end':start+len(chunk),'content':chunk,'section':section})
         return self.describe(self.get(doc_id, organization))
 
     def chunks(self, identifier, organization):
@@ -118,4 +147,9 @@ class Store:
         doc = self.get_metadata(row['document_id'], organization)
         if not quote.strip() or quote not in row['content']:
             raise ValueError('Quote must be an exact nonempty excerpt from the stored chunk')
-        return {'document_id':doc['id'], 'chunk_id':chunk_id, 'page':row['page'], 'quote':quote, 'source_url':json.loads(doc['metadata'])['source_url'], 'pdf_reference':f"/api/documents/{doc['id']}/pdf#page={row['page']}", 'content_hash':doc['content_hash']}
+        metadata = json.loads(doc['metadata'])
+        result = {'document_id':doc['id'], 'chunk_id':chunk_id, 'page':row['page'], 'quote':quote, 'source_url':metadata['source_url'], 'pdf_reference':f"/api/documents/{doc['id']}/pdf#page={row['page']}", 'source_reference':f"/api/documents/{doc['id']}/pdf#page={row['page']}", 'content_hash':doc['content_hash']}
+        if row.get('section'):
+            result['section'] = row['section']
+            result['source_reference'] = f"/api/documents/{doc['id']}/pdf#section={row['section']}"
+        return result

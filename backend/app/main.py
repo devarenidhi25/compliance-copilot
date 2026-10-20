@@ -140,7 +140,11 @@ def create_app(db_path=None):
 
     @app.get('/api/documents/{identifier}/pdf')
     def pdf(identifier: str, org=Depends(organization)):
-        return Response(store.get(identifier,org)['pdf'], media_type='application/pdf', headers={'Content-Disposition':'inline; filename="source.pdf"'})
+        document = store.get(identifier,org)
+        is_html = document['metadata'] and json.loads(document['metadata']).get('original_format',{}).get('value') == 'html'
+        media_type = 'text/html; charset=utf-8' if is_html else 'application/pdf'
+        filename = 'source.html' if is_html else 'source.pdf'
+        return Response(document['pdf'], media_type=media_type, headers={'Content-Disposition':f'inline; filename="{filename}"'})
 
     @app.post('/api/citations/validate')
     def citation(body: CitationRequest, org=Depends(organization)):

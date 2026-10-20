@@ -120,6 +120,47 @@ are user supplied and may repeat; select UUIDs for unambiguous version compariso
 No automatic selection of a newest/effective regulation is performed. Verify dates,
 applicability and interpretations manually against official source PDFs.
 
+## Bounded official-source pilot
+
+`official_sources.json` is the configurable registry for the eight RBI and SEBI
+listing pages. The initial pilot enables only RBI notifications, Master Directions,
+and FAQs; all SEBI sources and RBI press releases are disabled. The explicit command
+below checks at most two listing pages per enabled source and processes at most ten
+KYC-related discovered documents. Overrides are bounded to five listing pages and
+25 documents. It does not crawl a whole site, run on server startup, or synchronize
+the vector index.
+
+From the repository root, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.regulatory_ingest
+```
+
+The command writes a JSON run report to `data/ingestion-report.json`. To change
+limits, registry, delay, or report location, use `--max-listing-pages`,
+`--max-documents`, `--registry`, `--request-delay`, and `--report`. Every discovered
+document URL is checked against the official RBI/SEBI host allowlist. Redirects are
+refused. Listing parse failures, failed URLs, unsupported formats, and extraction
+failures appear in the report; when a source is inaccessible, download its document
+manually from the official site and upload the original PDF through the application.
+
+Original PDF or HTML bytes are retained in SQLite. HTML text is grouped by headings;
+PDF text retains physical page numbers. Citations include the original source URL and
+page or section reference. Inspect the source through the authenticated document
+library and compare the cited quotation with the original before relying on it.
+Repeated runs skip identical source content and retain changed content as another
+version. The tool does not infer that a document is current or in force. Ingestion
+does not download an embedding model or build vectors. When ready, run the existing
+explicit index command separately:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.index_cli sync
+```
+
+Automated tests mock all HTTP responses; no live-source ingestion claim is made by
+those tests. Review the official pages and run report manually. Do not treat listing
+pages as source evidence or synthetic fixtures as regulatory material.
+
 ## Remaining work
 
 No automatic regulatory refresh, verified-metadata review UI, schema migration

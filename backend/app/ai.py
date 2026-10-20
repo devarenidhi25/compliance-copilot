@@ -96,7 +96,7 @@ async def generate(store, body, org, retrieval=None):
         if body.task == 'gap_analysis' and (not isinstance(assessment,str) or assessment not in ASSESSMENTS):
             raise RuntimeError('Invalid or missing assessment label; no findings accepted')
         items.append({'statement':item['statement'], 'interpretation':item['statement'],
-                      'source_facts':[{'quote':c['quote'], 'document_id':c['document_id'], 'page':c['page'], 'chunk_id':c['chunk_id']} for c in citations],
+                      'source_facts':[{'quote':c['quote'], 'document_id':c['document_id'], 'page':c['page'], 'section':c.get('section'), 'source_url':c['source_url'], 'source_reference':c['source_reference'], 'chunk_id':c['chunk_id']} for c in citations],
                       'assessment':assessment if body.task=='gap_analysis' else None,
                       'citations':citations,'review_status':'pending_human_review'})
     return {'task':body.task,'items':items,'limitations':'Hybrid BM25/local semantic retrieval with RRF. Selected excerpts may omit relevant provisions; comparison hints cover at most ten changed physical pages. Citation validation checks provenance, not whether the interpretation is correct. Human review required.'}

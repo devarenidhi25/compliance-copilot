@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {"id":"sebi_regulations","url":"https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&ssid=3&smid=0","regulator":"SEBI","category":"regulations","enabled":false},
+    {"id":"sebi_circulars","url":"https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&ssid=7&smid=0","regulator":"SEBI","category":"circulars","enabled":false},
+    {"id":"sebi_master_circulars","url":"https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&ssid=6","regulator":"SEBI","category":"master_circulars","enabled":false},
+    {"id":"sebi_legal_library","url":"https://www.sebi.gov.in/legal.html","regulator":"SEBI","category":"legal_library","enabled":false},
+    {"id":"rbi_notifications","url":"https://rbi.org.in/scripts/NotificationUser.aspx","regulator":"RBI","category":"notifications","enabled":true},
+    {"id":"rbi_master_directions","url":"https://www.rbi.org.in/Scripts/BS_ViewMasterDirections.aspx","regulator":"RBI","category":"master_directions","enabled":true},
+    {"id":"rbi_faqs","url":"https://www.rbi.org.in/Commonman/English/Scripts/FAQs.aspx","regulator":"RBI","category":"faqs","enabled":true},
+    {"id":"rbi_press_releases","url":"https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx","regulator":"RBI","category":"press_releases","enabled":false}
+  ]
+}
