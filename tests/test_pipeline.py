@@ -278,3 +278,165 @@ def test_invalid_assessment_rejected(client,monkeypatch,assessment):
     monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=transport,**kw))
     response=client.post('/api/ai',json={'task':'gap_analysis','question':'review','document_ids':[reg['id'],policy['id']]})
     assert response.status_code==503 and 'assessment' in response.json()['detail']
+
+
+def mock_model(monkeypatch, payload, captured=None):
+    import backend.app.ai as module
+    original=httpx.AsyncClient
+    def respond(request):
+        if captured is not None: captured.append(json.loads(request.content))
+        return httpx.Response(200,json={'message':{'content':json.dumps(payload)}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+
+
+def test_locate_quote_tolerates_whitespace_and_typography():
+    from backend.app.store import locate_quote
+    content='   The  regulated entity\n      shall   carry out “periodic updation” of KYC–records.\n'
+    assert locate_quote(content,'The regulated entity shall carry out')=='The  regulated entity\n      shall   carry out'
+    assert locate_quote(content,'carry out "periodic updation" of KYC-records.')=='carry out “periodic updation” of KYC–records.'
+    with pytest.raises(ValueError,match='at least'): locate_quote(content,'KYC')
+    with pytest.raises(ValueError,match='excerpt'): locate_quote(content,'shall not carry out periodic updation')
+    with pytest.raises(ValueError,match='nonempty'): locate_quote(content,'   \n ')
+    # A very short chunk can still be quoted in full.
+    assert locate_quote('  Short.\n','Short.')=='Short.'
+
+
+def test_citation_api_returns_original_span(client):
+    doc=upload(client,pdf('SYNTHETIC rule:   retain   the demo identifier.')).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    result=client.post('/api/citations/validate',json={'chunk_id':chunk['id'],'quote':'rule: retain the demo identifier.'})
+    assert result.status_code==200,result.text
+    assert result.json()['quote'] in chunk['content']
+
+
+def test_ai_keeps_valid_items_and_reports_rejected(client,monkeypatch):
+    doc=upload(client,pdf('SYNTHETIC rule:   retain   the demo identifier for five years.')).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    payload={'items':[
+        {'statement':'SYNTHETIC retention','citations':[{'chunk_id':chunk['id'],'quote':'retain the demo identifier for five years.'}]},
+        {'statement':'SYNTHETIC invented','citations':[{'chunk_id':chunk['id'],'quote':'destroy the identifier immediately'}]},
+        {'statement':'SYNTHETIC wrong chunk','citations':[{'chunk_id':'not-provided','quote':'retain the demo identifier'}]},
+        'not an object']}
+    captured=[]
+    mock_model(monkeypatch,payload,captured)
+    response=client.post('/api/ai',json={'task':'qa','question':'retain identifier','document_ids':[doc['id']]})
+    assert response.status_code==200,response.text
+    result=response.json()
+    assert [i['statement'] for i in result['items']]==['SYNTHETIC retention']
+    assert result['items'][0]['citations'][0]['quote'] in chunk['content']
+    assert [r['index'] for r in result['rejected_items']]==[1,2,3]
+    assert 'source validation' in result['rejected_items'][0]['reason']
+    assert 'not provided' in result['rejected_items'][1]['reason']
+    assert '3 model item(s) were rejected' in result['limitations']
+    # Request shape: context window set, evidence compact and whitespace-collapsed.
+    request=captured[0]
+    assert request['options']['num_ctx']==16384
+    prompt=json.loads(request['messages'][1]['content'])
+    evidence=prompt['evidence'][0]
+    assert set(evidence)=={'chunk_id','document_id','page','text'}
+    assert '  ' not in evidence['text'] and '\n' not in evidence['text']
+    assert prompt['documents'][0]['metadata']['title']=='SYNTHETIC test regulation'
+
+
+def test_ai_num_ctx_is_configurable(client,monkeypatch):
+    monkeypatch.setenv('OLLAMA_NUM_CTX','32768')
+    doc=upload(client).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    captured=[]
+    mock_model(monkeypatch,{'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]},captured)
+    assert client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[doc['id']]}).status_code==200
+    assert captured[0]['options']['num_ctx']==32768
+
+
+def test_fit_budget_trims_weakest_evidence_per_document():
+    from backend.app.ai import fit_budget, SYSTEM_PROMPT
+    evidence=[{'chunk_id':f'{d}-{r}','document_id':d,'page':1,'text':'x'*1200} for d in 'abcd' for r in range(6)]
+    prompt={'task':'qa','question':'q','stored_page_differences':None,'documents':[],'evidence':evidence,'output_schema':{}}
+    notes=fit_budget(prompt,12000)
+    assert len(SYSTEM_PROMPT)+len(json.dumps(prompt))<=12000
+    kept=prompt['evidence']
+    assert {e['document_id'] for e in kept}==set('abcd')
+    # The highest-ranked chunk of every document survives.
+    assert {f'{d}-0' for d in 'abcd'} <= {e['chunk_id'] for e in kept}
+    assert any('omitted' in n for n in notes)
+    # Budget too small even with one chunk each: keep one per document and say so.
+    prompt['evidence']=[{'chunk_id':f'{d}-0','document_id':d,'page':1,'text':'x'*5000} for d in 'abcd']
+    notes=fit_budget(prompt,8000)
+    assert len(prompt['evidence'])==4 and any('OLLAMA_NUM_CTX' in n for n in notes)
+
+
+def test_fit_budget_caps_page_differences():
+    from backend.app.ai import fit_budget
+    differences=[{'physical_page':i,'diff':'y'*3000} for i in range(1,11)]
+    prompt={'task':'comparison','question':'q','stored_page_differences':differences,'documents':[],'evidence':[],'output_schema':{}}
+    notes=fit_budget(prompt,15000)
+    assert 1<=len(prompt['stored_page_differences'])<10
+    assert len(json.dumps(prompt['stored_page_differences']))<=5000
+    assert any('page difference' in n for n in notes)
+
+
+def test_gap_item_needs_one_regulatory_and_one_internal_not_every_document(client,monkeypatch):
+    first=upload(client,pdf('SYNTHETIC rule one: verify the demo identity record.')).json()
+    second=upload(client,pdf('SYNTHETIC rule two: review the demo register annually.')).json()
+    policy=upload(client,pdf('SYNTHETIC policy: staff verify the demo identity record.'),kind='internal',regulator=None).json()
+    quote=lambda d:client.get(f"/api/documents/{d['id']}/chunks").json()[0]['content']
+    cite=lambda d:{'chunk_id':client.get(f"/api/documents/{d['id']}/chunks").json()[0]['id'],'quote':quote(d)}
+    payload={'items':[
+        {'statement':'SYNTHETIC addressed','assessment':'APPEARS_ADDRESSED','citations':[cite(first),cite(policy)]},
+        {'statement':'SYNTHETIC regulatory only','assessment':'POTENTIAL_GAP','citations':[cite(second)]}]}
+    mock_model(monkeypatch,payload)
+    response=client.post('/api/ai',json={'task':'gap_analysis','question':'review','document_ids':[first['id'],second['id'],policy['id']]})
+    assert response.status_code==200,response.text
+    result=response.json()
+    assert [i['statement'] for i in result['items']]==['SYNTHETIC addressed']
+    assert 'regulatory and one internal' in result['rejected_items'][0]['reason']
+
+
+def test_qa_reports_ignored_internal_documents(client,monkeypatch):
+    reg=upload(client).json()
+    policy=upload(client,kind='internal',regulator=None).json()
+    chunk=client.get(f"/api/documents/{reg['id']}/chunks").json()[0]
+    captured=[]
+    mock_model(monkeypatch,{'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]},captured)
+    response=client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[reg['id'],policy['id']]})
+    assert response.status_code==200,response.text
+    assert any('internal document' in n for n in response.json()['notes'])
+    prompt=json.loads(captured[0]['messages'][1]['content'])
+    assert {e['document_id'] for e in prompt['evidence']}=={reg['id']}
+
+
+def test_ai_disables_thinking_and_honours_chunk_limit(client,monkeypatch):
+    monkeypatch.setenv('AI_CHUNKS_PER_DOCUMENT','1')
+    doc=upload(client).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    captured=[]
+    mock_model(monkeypatch,{'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]},captured)
+    response=client.post('/api/ai',json={'task':'qa','question':'record review','document_ids':[doc['id']]})
+    assert response.status_code==200,response.text
+    assert captured[0]['think'] is False
+    assert len(json.loads(captured[0]['messages'][1]['content'])['evidence'])==1
+    assert response.json()['evidence_excerpts']==1 and response.json()['generation_seconds']>=0
+
+
+@pytest.mark.parametrize('failure,expected',[
+    ('timeout','did not finish within'),
+    ('connect','Cannot reach Ollama'),
+    ('memory','model requires more system memory'),
+    ('missing','ollama pull'),
+    ('thinking','did not return valid JSON'),
+    ('empty','no evidence items')])
+def test_ai_reports_specific_ollama_failures(client,monkeypatch,failure,expected):
+    import backend.app.ai as module
+    doc=upload(client).json()
+    original=httpx.AsyncClient
+    def respond(request):
+        if failure=='timeout': raise httpx.ReadTimeout('slow')
+        if failure=='connect': raise httpx.ConnectError('refused')
+        if failure=='memory': return httpx.Response(500,json={'error':'model requires more system memory (9.1 GiB) than is available (6.0 GiB)'})
+        if failure=='missing': return httpx.Response(404,json={'error':'model "qwen3:8b" not found'})
+        if failure=='thinking': return httpx.Response(200,json={'message':{'content':'<think>hmm','thinking':'...'}})
+        return httpx.Response(200,json={'message':{'content':'{\n\n}'}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+    response=client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[doc['id']]})
+    assert response.status_code==503
+    assert expected in response.json()['detail'],response.json()['detail']
