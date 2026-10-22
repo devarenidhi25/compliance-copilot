@@ -133,3 +133,81 @@ def test_existing_database_gets_additive_section_column(tmp_path):
     with store.engine.connect() as conn:
         columns={row[1] for row in conn.execute(text('PRAGMA table_info(chunks)'))}
     assert 'section' in columns
+
+
+BASE='https://www.rbi.org.in/Scripts/BS_ViewMasterDirections.aspx'
+
+
+def test_read_more_is_content_not_pagination_and_postback_is_reported(tmp_path):
+    listing='''<a href="/kyc/details.html">Read more</a>
+      <a href="/pdf/kyc.pdf">KYC Master Direction</a>
+      <a href="javascript:__doPostBack('grid','Page$2')">2</a>
+      <a href="javascript:__doPostBack('grid','Page$Next')">Next</a>
+      <a href="javascript:void(0)">Print this page</a>'''
+    requested=[]
+    def handler(request):
+        requested.append(request.url.path)
+        if request.url.path.endswith('.aspx'):
+            return httpx.Response(200,headers={'content-type':'text/html'},text=listing)
+        return httpx.Response(200,headers={'content-type':'application/pdf'},content=pdf_bytes('Official test KYC evidence'))
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    report=run_ingestion(Store(tmp_path/'c.sqlite3'),registry(tmp_path,[BASE]),client=client,request_delay=0)
+    assert '/kyc/details.html' not in requested  # "Read more" was not followed as a listing page
+    assert report['listing_pages_processed']==1 and report['documents_added']==1
+    assert report['unfollowed_pagination']==[{'url':BASE,'links':['2','Next'],'reason':report['unfollowed_pagination'][0]['reason']}]
+    assert 'postback' in report['unfollowed_pagination'][0]['reason']
+    client.close()
+
+
+def test_network_error_on_pdf_url_is_a_failed_url_not_extraction_failure(tmp_path):
+    def handler(request):
+        if request.url.path.endswith('.aspx'):
+            return httpx.Response(200,headers={'content-type':'text/html'},text='<a href="/pdf/kyc.pdf">KYC direction</a>')
+        raise httpx.ConnectError('connection reset fetching kyc.pdf')
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    report=run_ingestion(Store(tmp_path/'c.sqlite3'),registry(tmp_path,[BASE]),client=client,request_delay=0)
+    assert report['extraction_failures']==[]
+    assert report['failed_urls'][0]['url'].endswith('kyc.pdf') and 'ConnectError' in report['failed_urls'][0]['reason']
+    client.close()
+
+
+def test_unparseable_pdf_is_an_extraction_failure(tmp_path):
+    def handler(request):
+        if request.url.path.endswith('.aspx'):
+            return httpx.Response(200,headers={'content-type':'text/html'},text='<a href="/pdf/kyc.pdf">KYC direction</a>')
+        return httpx.Response(200,headers={'content-type':'application/pdf'},content=b'%PDF-broken')
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    report=run_ingestion(Store(tmp_path/'c.sqlite3'),registry(tmp_path,[BASE]),client=client,request_delay=0)
+    assert report['failed_urls']==[] and report['extraction_failures'][0]['url'].endswith('kyc.pdf')
+    client.close()
+
+
+def test_oversized_download_aborts_and_client_errors_are_not_retried(tmp_path):
+    import backend.app.regulatory_ingest as module
+    calls={'missing':0}
+    def handler(request):
+        if request.url.path.endswith('.aspx'):
+            return httpx.Response(200,headers={'content-type':'text/html'},text='<a href="/pdf/kyc-big.pdf">KYC big</a><a href="/pdf/kyc-missing.pdf">KYC missing</a>')
+        if 'missing' in request.url.path:
+            calls['missing']+=1
+            return httpx.Response(404)
+        return httpx.Response(200,headers={'content-type':'application/pdf'},content=b'%PDF-'+b'x'*(module.MAX_RESPONSE_BYTES+10))
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    report=run_ingestion(Store(tmp_path/'c.sqlite3'),registry(tmp_path,[BASE]),client=client,request_delay=0)
+    reasons={item['url'].rsplit('/',1)[-1]:item['reason'] for item in report['failed_urls']}
+    assert '20 MiB' in reasons['kyc-big.pdf'] and '404' in reasons['kyc-missing.pdf']
+    assert calls['missing']==1
+    client.close()
+
+
+def test_gzip_listing_is_decoded_once(tmp_path):
+    import gzip
+    body=gzip.compress(b'<a href="/pdf/kyc.pdf">KYC direction</a>')
+    def handler(request):
+        if request.url.path.endswith('.aspx'):
+            return httpx.Response(200,headers={'content-type':'text/html','content-encoding':'gzip'},content=body)
+        return httpx.Response(200,headers={'content-type':'application/pdf'},content=pdf_bytes('Official test KYC evidence'))
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    report=run_ingestion(Store(tmp_path/'c.sqlite3'),registry(tmp_path,[BASE]),client=client,request_delay=0)
+    assert report['documents_added']==1,report
+    client.close()

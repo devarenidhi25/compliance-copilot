@@ -19,6 +19,9 @@ from .store import Store
 MAX_LISTING_PAGES = 5
 MAX_DOCUMENTS = 25
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
+# Only unambiguous pagination labels; generic words like 'more' ('Read more') are content links.
+PAGINATION_TEXT = re.compile(r'^(next|next page|older|older entries|\u203a|\u00bb|>|>>)$', re.I)
+PAGE_NUMBER = re.compile(r'^\d{1,3}$')
 KYC_TERMS = re.compile(r'\b(kyc|know your customer|customer due diligence|anti[- ]money laundering|money laundering|pmla)\b', re.I)
 
 
@@ -35,7 +38,9 @@ class ListingParser(HTMLParser):
         if tag in ('script', 'style', 'noscript'):
             self._skip += 1
         if tag == 'a' and attrs.get('href'):
-            self._anchor = {'url':urljoin(self.base_url, attrs['href']), 'text':[], 'rel':attrs.get('rel',''), 'title':attrs.get('title','')}
+            href = attrs['href'].strip()
+            url = href if href.lower().startswith('javascript:') else urljoin(self.base_url, href)
+            self._anchor = {'url':url, 'text':[], 'rel':attrs.get('rel') or '', 'title':attrs.get('title') or ''}
 
     def handle_endtag(self, tag):
         if tag in ('script', 'style', 'noscript') and self._skip:
@@ -111,28 +116,39 @@ def load_registry(path):
     return registry
 
 
+def _is_pagination(link, title):
+    return 'next' in link['rel'].lower().split() or bool(PAGINATION_TEXT.match(title))
+
+
 def _document_candidates(base_url, content):
+    """Return (document candidates, followable pagination URLs, unfollowable postback pagination labels)."""
     parser = ListingParser(base_url)
     parser.feed(content)
-    candidates, pagination = [], []
+    candidates, pagination, postback = [], [], []
     for link in parser.links:
+        title = (link['text'] or link['title']).strip()
+        if link['url'].lower().startswith('javascript:'):
+            # ASP.NET listings (e.g. RBI) paginate with __doPostBack form posts,
+            # which this crawler does not submit; report them instead of ignoring.
+            if '__dopostback' in link['url'].lower() and (_is_pagination(link, title) or PAGE_NUMBER.match(title)):
+                postback.append(title)
+            continue
         try:
             official_url(link['url'])
         except ValueError:
             continue
-        title = link['text'] or link['title']
-        path = urlsplit(link['url']).path.lower()
-        rel = link['rel'].lower()
-        if 'next' in rel or re.search(r'(^|\b)(next|older|more)($|\b)', title, re.I):
+        if _is_pagination(link, title):
             pagination.append(link['url'])
             continue
         if not title or len(title) < 5:
             continue
+        path = urlsplit(link['url']).path.lower()
         if path.endswith('.pdf') or KYC_TERMS.search(title):
             candidates.append({'url':link['url'], 'title':title})
     if not candidates and not pagination:
-        raise ValueError('Listing parser found no official document or pagination links')
-    return candidates, pagination
+        detail = ' (pagination uses ASP.NET postback, which is not followed)' if postback else ''
+        raise ValueError('Listing parser found no official document or pagination links' + detail)
+    return candidates, pagination, postback
 
 
 def _already_stored(store, source_url, digest):
@@ -154,24 +170,38 @@ def _source_family(store, source_url):
     return None
 
 
+def _download(client, url):
+    """Stream a response, aborting as soon as it exceeds the size limit."""
+    with client.stream('GET', url, follow_redirects=False) as response:
+        if response.is_redirect:
+            raise ValueError('Redirect refused; use the final official document URL')
+        response.raise_for_status()
+        declared = response.headers.get('content-length')
+        if declared and declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+            raise ValueError('Response exceeds 20 MiB limit')
+        data = bytearray()
+        for block in response.iter_bytes():
+            data.extend(block)
+            if len(data) > MAX_RESPONSE_BYTES:
+                raise ValueError('Response exceeds 20 MiB limit')
+        # Body is already decoded; drop encoding headers so it is not decoded twice.
+        headers = [(k, v) for k, v in response.headers.multi_items() if k.lower() not in ('content-encoding', 'content-length', 'transfer-encoding')]
+        return httpx.Response(response.status_code, headers=headers, content=bytes(data), request=response.request)
+
+
 def _fetch(client, url, retries):
-    last_error = None
     for attempt in range(retries + 1):
         try:
             official_url(url)
-            response = client.get(url, follow_redirects=False)
-            if response.is_redirect:
-                raise ValueError('Redirect refused; use the final official document URL')
-            response.raise_for_status()
-            if len(response.content) > MAX_RESPONSE_BYTES:
-                raise ValueError('Response exceeds 20 MiB limit')
-            return response
-        except (httpx.HTTPError, ValueError) as exc:
-            last_error = exc
-            if attempt >= retries or isinstance(exc, ValueError):
+            return _download(client, url)
+        except httpx.HTTPStatusError as exc:
+            # Client errors (404, 403) will not succeed on retry.
+            if attempt >= retries or exc.response.status_code < 500:
                 raise
-            time.sleep(0.25 * (attempt + 1))
-    raise last_error
+        except httpx.TransportError:
+            if attempt >= retries:
+                raise
+        time.sleep(0.25 * (attempt + 1))
 
 
 def run_ingestion(store, registry_path, *, max_listing_pages=2, max_documents=10, client=None, request_delay=0.25):
@@ -184,7 +214,8 @@ def run_ingestion(store, registry_path, *, max_listing_pages=2, max_documents=10
     registry = load_registry(registry_path)
     report = {'sources_checked':[], 'listing_pages_processed':0, 'documents_discovered':0,
               'documents_downloaded':0, 'documents_added':0, 'documents_updated':0,
-              'duplicates_skipped':0, 'extraction_failures':[], 'unsupported_formats':[], 'failed_urls':[]}
+              'duplicates_skipped':0, 'extraction_failures':[], 'unsupported_formats':[], 'failed_urls':[],
+              'unfollowed_pagination':[]}
     owns_client = client is None
     if owns_client:
         client = httpx.Client(timeout=20, headers={'User-Agent':'ComplianceCopilot/0.1 (bounded user-requested ingestion)'}, trust_env=False)
@@ -205,7 +236,10 @@ def run_ingestion(store, registry_path, *, max_listing_pages=2, max_documents=10
                     response = _fetch(client, listing_url, retries=2)
                     if 'html' not in response.headers.get('content-type','').lower():
                         raise ValueError('Listing did not return HTML')
-                    candidates, pagination = _document_candidates(listing_url, response.text)
+                    candidates, pagination, postback = _document_candidates(listing_url, response.text)
+                    if postback:
+                        report['unfollowed_pagination'].append({'url':listing_url, 'links':postback,
+                            'reason':'ASP.NET postback pagination is not followed; only this page was read'})
                     pages += 1
                     report['listing_pages_processed'] += 1
                     for item in candidates:
@@ -223,52 +257,46 @@ def run_ingestion(store, registry_path, *, max_listing_pages=2, max_documents=10
         report['documents_discovered'] = len(deduplicated)
         for item in candidates:
             try:
-                response = _fetch(client, item['url'], retries=2)
+                try:
+                    response = _fetch(client, item['url'], retries=2)
+                except (httpx.HTTPError, ValueError) as exc:
+                    report['failed_urls'].append({'url':item['url'], 'reason':f'{type(exc).__name__}: {exc}'})
+                    continue
                 report['documents_downloaded'] += 1
                 media_type = response.headers.get('content-type','').split(';',1)[0].strip().lower()
                 raw = response.content
                 digest = hashlib.sha256(raw).hexdigest()
-                existing_id = _already_stored(store, item['url'], digest)
-                if existing_id:
+                if _already_stored(store, item['url'], digest):
                     report['duplicates_skipped'] += 1
                     continue
-                title = item['title'][:500]
                 # Dates are left unknown unless a source-specific parser can establish
                 # their meaning; a date appearing in a title may be an effective date.
-                publication_date = None
                 family_id = _source_family(store, item['url'])
-                metadata = SimpleNamespace(title=title, kind='regulatory', regulator=item['regulator'],
-                    document_type=item['category'], source_url=item['url'], publication_date=publication_date,
+                metadata = SimpleNamespace(title=item['title'][:500], kind='regulatory', regulator=item['regulator'],
+                    document_type=item['category'], source_url=item['url'], publication_date=None,
                     version=None, effective_date=None, family_id=family_id)
+                now = datetime.now(timezone.utc).isoformat()
                 source_meta = {'source_identifier':item['url'], 'category':item['category'],
-                    'document_identifier':None, 'updated_date':None,
-                    'downloaded_at':datetime.now(timezone.utc).isoformat(),
-                    'ingested_at':datetime.now(timezone.utc).isoformat()}
-                is_update = family_id is not None
-                if 'application/pdf' in media_type or raw.startswith(b'%PDF-'):
-                    result = store.ingest(raw, metadata, 'official-regulatory-library', verified_source=item['url'],
-                        source_metadata={**source_meta,'original_format':'pdf'})
-                elif 'text/html' in media_type:
-                    parser = TextSectionsParser()
-                    parser.feed(response.text)
-                    sections = parser.finish()
-                    try:
-                        result = store.ingest_html(raw, metadata, 'official-regulatory-library', sections,
-                            verified_source=item['url'], source_metadata=source_meta)
-                    except ValueError as exc:
-                        report['extraction_failures'].append({'url':item['url'],'reason':str(exc)})
+                    'document_identifier':None, 'updated_date':None, 'downloaded_at':now, 'ingested_at':now}
+                try:
+                    if 'application/pdf' in media_type or raw.startswith(b'%PDF-'):
+                        result = store.ingest(raw, metadata, 'official-regulatory-library', verified_source=item['url'],
+                            source_metadata={**source_meta,'original_format':'pdf'}, shared=True)
+                    elif 'text/html' in media_type:
+                        parser = TextSectionsParser()
+                        parser.feed(response.text)
+                        result = store.ingest_html(raw, metadata, 'official-regulatory-library', parser.finish(),
+                            verified_source=item['url'], source_metadata=source_meta, shared=True)
+                    else:
+                        report['unsupported_formats'].append({'url':item['url'],'content_type':media_type or 'unknown'})
                         continue
-                else:
-                    report['unsupported_formats'].append({'url':item['url'],'content_type':media_type or 'unknown'})
+                except ValueError as exc:
+                    report['extraction_failures'].append({'url':item['url'],'reason':str(exc)})
                     continue
                 if result:
-                    report['documents_updated' if is_update else 'documents_added'] += 1
+                    report['documents_updated' if family_id is not None else 'documents_added'] += 1
             except Exception as exc:
-                message = str(exc)
-                if 'extract' in message.lower() or 'parse' in message.lower() or 'pdf' in message.lower():
-                    report['extraction_failures'].append({'url':item['url'],'reason':message})
-                else:
-                    report['failed_urls'].append({'url':item['url'],'reason':message})
+                report['failed_urls'].append({'url':item['url'], 'reason':f'Unexpected {type(exc).__name__}: {exc}'})
             finally:
                 time.sleep(request_delay)
         return report
