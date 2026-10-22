@@ -41,6 +41,13 @@ ollama serve
 `OLLAMA_NUM_CTX` (default `16384`) sets the model context window sent with every
 request; Ollama's own default is much smaller and silently truncates long prompts.
 `OLLAMA_TIMEOUT` (default `300` seconds) bounds each generation; raise it on slow CPUs.
+`OLLAMA_THINK` (default `false`) controls reasoning mode. Keep it off for qwen3: with
+thinking on, the model spends its output on reasoning and returns an empty JSON object.
+`AI_CHUNKS_PER_DOCUMENT` (default `6`, range 1–20) sets how many excerpts per selected
+document are sent to the model; lower it on CPU-only machines to speed up generation.
+Generation failures report the specific cause (timeout, Ollama unreachable, Ollama error
+such as insufficient memory, missing model, or non-JSON output). Successful responses
+include `generation_seconds` and the number of evidence excerpts used.
 `OLLAMA_PROMPT_CHARS` optionally overrides the prompt budget (default derived from
 `OLLAMA_NUM_CTX`). When evidence exceeds the budget, the lowest-ranked excerpts are
 dropped first (one excerpt per document is always kept) and the response says so.

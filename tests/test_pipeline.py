@@ -403,3 +403,40 @@ def test_qa_reports_ignored_internal_documents(client,monkeypatch):
     assert any('internal document' in n for n in response.json()['notes'])
     prompt=json.loads(captured[0]['messages'][1]['content'])
     assert {e['document_id'] for e in prompt['evidence']}=={reg['id']}
+
+
+def test_ai_disables_thinking_and_honours_chunk_limit(client,monkeypatch):
+    monkeypatch.setenv('AI_CHUNKS_PER_DOCUMENT','1')
+    doc=upload(client).json()
+    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
+    captured=[]
+    mock_model(monkeypatch,{'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]},captured)
+    response=client.post('/api/ai',json={'task':'qa','question':'record review','document_ids':[doc['id']]})
+    assert response.status_code==200,response.text
+    assert captured[0]['think'] is False
+    assert len(json.loads(captured[0]['messages'][1]['content'])['evidence'])==1
+    assert response.json()['evidence_excerpts']==1 and response.json()['generation_seconds']>=0
+
+
+@pytest.mark.parametrize('failure,expected',[
+    ('timeout','did not finish within'),
+    ('connect','Cannot reach Ollama'),
+    ('memory','model requires more system memory'),
+    ('missing','ollama pull'),
+    ('thinking','did not return valid JSON'),
+    ('empty','no evidence items')])
+def test_ai_reports_specific_ollama_failures(client,monkeypatch,failure,expected):
+    import backend.app.ai as module
+    doc=upload(client).json()
+    original=httpx.AsyncClient
+    def respond(request):
+        if failure=='timeout': raise httpx.ReadTimeout('slow')
+        if failure=='connect': raise httpx.ConnectError('refused')
+        if failure=='memory': return httpx.Response(500,json={'error':'model requires more system memory (9.1 GiB) than is available (6.0 GiB)'})
+        if failure=='missing': return httpx.Response(404,json={'error':'model "qwen3:8b" not found'})
+        if failure=='thinking': return httpx.Response(200,json={'message':{'content':'<think>hmm','thinking':'...'}})
+        return httpx.Response(200,json={'message':{'content':'{\n\n}'}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+    response=client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[doc['id']]})
+    assert response.status_code==503
+    assert expected in response.json()['detail'],response.json()['detail']

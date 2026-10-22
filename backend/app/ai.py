@@ -7,6 +7,7 @@ survives validation.
 import difflib
 import json
 import os
+import time
 
 import httpx
 from sqlalchemy import text
@@ -48,13 +49,17 @@ def settings():
         'num_ctx': num_ctx,
         'timeout': float(os.getenv('OLLAMA_TIMEOUT', '300')),
         'prompt_chars': int(budget) if budget else max(8000, (num_ctx - OUTPUT_TOKEN_RESERVE) * CHARS_PER_TOKEN),
+        # Reasoning models (qwen3) otherwise spend the output budget "thinking"
+        # and return an empty JSON object under format=json.
+        'think': os.getenv('OLLAMA_THINK', 'false').strip().lower() in ('1', 'true', 'yes'),
+        'chunks_per_document': max(1, min(20, int(os.getenv('AI_CHUNKS_PER_DOCUMENT', str(CHUNKS_PER_DOCUMENT))))),
     }
 
 
-def select_evidence(retrieval, ids, org, question):
+def select_evidence(retrieval, ids, org, question, limit=CHUNKS_PER_DOCUMENT):
     selected = []
     for identifier in ids:
-        selected.extend(retrieval.search(question, org, {'document_ids':[identifier]}, mode='hybrid', limit=CHUNKS_PER_DOCUMENT)['results'])
+        selected.extend(retrieval.search(question, org, {'document_ids':[identifier]}, mode='hybrid', limit=limit)['results'])
     return selected
 
 
@@ -85,14 +90,14 @@ def collapse_whitespace_lines(value):
     return '\n'.join(collapse_whitespace(line) for line in value.splitlines() if line.strip())
 
 
-def prioritize_changed_pages(store, docs, chunks, differences, org):
+def prioritize_changed_pages(store, docs, chunks, differences, org, limit=CHUNKS_PER_DOCUMENT):
     changed_pages = {d['physical_page'] for d in differences}
     for document in docs:
         changed = [c for c in store.chunks(document['id'], org) if c['page'] in changed_pages and c['content'].strip()][:3]
         existing = [c for c in chunks if c['document_id'] == document['id']]
         chunks = [c for c in chunks if c['document_id'] != document['id']]
         unique = {c['id']:c for c in changed + existing}
-        chunks.extend(list(unique.values())[:CHUNKS_PER_DOCUMENT])
+        chunks.extend(list(unique.values())[:limit])
     return chunks
 
 
@@ -136,13 +141,38 @@ def fit_budget(prompt, budget):
 
 
 async def call_model(prompt, config):
-    async with httpx.AsyncClient(timeout=config['timeout'], trust_env=False) as client:
-        response = await client.post(config['url']+'/api/chat', json={
-            'model':config['model'], 'stream':False, 'format':'json',
-            'messages':[{'role':'system','content':SYSTEM_PROMPT}, {'role':'user','content':json.dumps(prompt)}],
-            'options':{'temperature':0, 'num_ctx':config['num_ctx']}})
-        response.raise_for_status()
-        return json.loads(response.json()['message']['content'])
+    """Call Ollama; raise RuntimeError with a specific, actionable reason on failure."""
+    model, url, timeout = config['model'], config['url'], config['timeout']
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            response = await client.post(url+'/api/chat', json={
+                'model':model, 'stream':False, 'format':'json', 'think':config['think'],
+                'messages':[{'role':'system','content':SYSTEM_PROMPT}, {'role':'user','content':json.dumps(prompt)}],
+                'options':{'temperature':0, 'num_ctx':config['num_ctx']}})
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f'Ollama did not finish within {timeout:g} seconds. On a CPU-only machine, raise OLLAMA_TIMEOUT, '
+                           f'lower AI_CHUNKS_PER_DOCUMENT, select fewer documents, or use a smaller model (OLLAMA_MODEL=qwen3:4b).') from exc
+    except httpx.ConnectError as exc:
+        raise RuntimeError(f'Cannot reach Ollama at {url}. Start Ollama (ollama serve), run: ollama pull {model}, and check OLLAMA_URL.') from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f'Ollama request failed ({type(exc).__name__}: {exc}).') from exc
+    if response.status_code != 200:
+        detail = response.text[:300]
+        try:
+            detail = response.json().get('error', detail)
+        except (ValueError, AttributeError):
+            pass
+        hint = f' Run: ollama pull {model}.' if response.status_code == 404 else ''
+        raise RuntimeError(f'Ollama returned HTTP {response.status_code}: {detail}.{hint}')
+    try:
+        content = response.json()['message']['content']
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError('Ollama replied in an unexpected format; check the Ollama version.') from exc
+    try:
+        return json.loads(content)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f'Model did not return valid JSON (received: {str(content)[:200]!r}). '
+                           'Keep OLLAMA_THINK=false for reasoning models.') from exc
 
 
 def validate_item(item, task, store, org, allowed, docs):
@@ -192,17 +222,18 @@ async def generate(store, body, org, retrieval=None):
         raise ValueError('Comparison requires two distinct regulatory versions in one family')
     if body.task == 'gap_analysis' and not internal:
         raise ValueError('Select an internal policy belonging to your organization')
+    config = settings()
     notes = []
     if body.task == 'qa' and internal:
         notes.append(f'Q&A answers from regulatory documents only; {len(internal)} selected internal document(s) were not used.')
         docs = regulatory
-    chunks = await run_in_threadpool(select_evidence, retrieval or Retrieval(store), [d['id'] for d in docs], org, body.question)
+    chunks = await run_in_threadpool(select_evidence, retrieval or Retrieval(store), [d['id'] for d in docs], org, body.question, config['chunks_per_document'])
     if not chunks:
         raise ValueError('No extractable evidence available')
     differences = None
     if body.task == 'comparison':
         differences = page_differences(store, docs)
-        chunks = prioritize_changed_pages(store, docs, chunks, differences, org)
+        chunks = prioritize_changed_pages(store, docs, chunks, differences, org, config['chunks_per_document'])
     prompt = {
         'task':body.task, 'question':body.question, 'stored_page_differences':differences,
         'documents':[{'id':d['id'], 'kind':d['kind'], 'metadata':{k:v.get('value') for k,v in json.loads(d['metadata']).items()}} for d in docs],
@@ -212,14 +243,12 @@ async def generate(store, body, org, retrieval=None):
     }
     if body.task == 'gap_analysis':
         prompt['output_schema']['items'][0]['assessment'] = 'Exactly one of: ' + ', '.join(sorted(ASSESSMENTS))
-    config = settings()
     notes.extend(fit_budget(prompt, config['prompt_chars']))
-    try:
-        output = await call_model(prompt, config)
-    except (httpx.HTTPError, KeyError, TypeError, AttributeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Local generation unavailable or invalid. Run: ollama pull {config['model']}; ollama serve. Check OLLAMA_MODEL, OLLAMA_URL and OLLAMA_TIMEOUT.") from exc
+    started = time.monotonic()
+    output = await call_model(prompt, config)
+    elapsed = round(time.monotonic() - started, 1)
     if not isinstance(output, dict) or not isinstance(output.get('items'), list) or not output['items']:
-        raise RuntimeError('Model returned an invalid evidence response; no results accepted')
+        raise RuntimeError(f'Model returned no evidence items (received: {json.dumps(output)[:200]}); no results accepted')
     raw_items = output['items']
     if len(raw_items) > MAX_ITEMS:
         notes.append(f'Model returned {len(raw_items)} items; only the first {MAX_ITEMS} were reviewed.')
@@ -242,4 +271,5 @@ async def generate(store, body, org, retrieval=None):
                    'comparison hints cover at most ten changed physical pages. Citation validation checks provenance '
                    '(whitespace-insensitive), not whether the interpretation is correct. Human review required.')
     return {'task':body.task, 'items':items, 'rejected_items':rejected, 'notes':notes,
+            'model':config['model'], 'generation_seconds':elapsed, 'evidence_excerpts':len(prompt['evidence']),
             'limitations':' '.join([limitations, *notes])}
