@@ -83,3 +83,30 @@ Real BGE-M3 inference and semantic/hybrid evaluation scores, real Ollama output 
 the single live Q&A above, live crawling of RBI/SEBI sites, and interactive browser
 behavior (the new admin panel, quote validation prompt and sandboxed HTML viewer were
 syntax-checked, not clicked through).
+
+## Web app (step 1 of the product frontend)
+
+Backend: **104 passed** (14 new tests for `/api/app`: identity, library page counts and
+index state, background jobs and their stages, one-at-a-time queueing, failures,
+gap score and risk, compare with change lines, audit trail and organization isolation,
+a check that the original `/api/ai` response is unchanged, and marking jobs interrupted by a restart). Frontend: **7 passed**
+(quote highlighting across PDF text items, whitespace fallback, plain-text marking,
+version families, who may add to shared families); `tsc` type-check and production
+build clean.
+
+Browser walkthrough (Chromium 141, real HTTP server, the real 291-page SEBI circular, a
+second version with an inserted page, a sample internal policy, the test embedder, and
+a stand-in model that cites the evidence it is sent plus one fabricated quote):
+wrong access code rejected; sign-in; Home; Library families; Ask with live progress, a
+cited answer, the fabricated statement removed, and the PDF opened at page 222 with the
+quote highlighted; Change detection reporting exactly the inserted page and an AI
+explanation; Gap analysis scored 50% with findings sorted by risk; Audit trail listing
+every request and opening a record; no horizontal page overflow at 390 px. No browser
+console errors other than the deliberate 401.
+
+The walkthrough found one real defect, now fixed: PDF.js 5.7 relies on
+`Map.getOrInsertComputed`, which current Chrome does not support, so PDFs failed to
+open. The app pins PDF.js 4.10.
+
+Not verified: real BGE-M3 and Ollama output in the app, Safari and Firefox, and
+screen-reader behaviour beyond semantic markup and labels.

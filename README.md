@@ -33,9 +33,46 @@ install CPU-only PyTorch on Windows and Linux and the standard PyTorch wheel on 
 If your system drive is short of space, set `PIP_CACHE_DIR`, `HF_HOME` and (for Ollama)
 `OLLAMA_MODELS` to folders on another drive before installing or downloading.
 
-Open `http://127.0.0.1:8000`, enter a configured token, and open the library. The API
-reference is at `http://127.0.0.1:8000/docs`. Keep this server local; token mapping is
-development authentication, not a replacement for real identity management.
+Open `http://127.0.0.1:8000` and sign in with your name, your role and a configured
+token as the access code. The previous developer page remains at `/console`, and the
+API reference is at `/docs`. Keep this server local; token mapping is development
+authentication, not a replacement for real identity management.
+
+## Web app
+
+The client-facing app (React, TypeScript, Vite) lives in `frontend/app/`. Its built
+files in `frontend/app/dist/` are committed, so running the server is enough: Node is
+only needed to change the app.
+
+| Page | What it does |
+| --- | --- |
+| Sign in | Name, role (Compliance Officer, Legal, Risk, Executive) and access code. The role orders the home page and is recorded in the audit trail. |
+| Home | Tasks in the order most useful for the role, library status, recent AI activity. |
+| Ask | A question or an action checklist over up to four regulations. Statements carry numbered citations; selecting one opens the PDF at the page with the quoted words highlighted. Removed statements are listed with the reason. |
+| Library | Documents grouped into version families with page counts, visibility and index status; upload drawer (including "new version of an existing document"); administrators can index from here. |
+| Change detection | Pick a document and two versions; every added, removed or modified passage with page links in both versions, and an optional AI explanation. |
+| Gap analysis | Pick a regulation and an internal policy; compliance score, findings sorted by risk, and the regulation's words beside the policy's for each finding. |
+| Audit trail | Every AI request with who asked, the role, documents, model, timing, outcome and the full recorded result. |
+
+AI requests run as background jobs, one at a time, with live progress (finding evidence,
+drafting, checking quotes). Reviewers can leave the page and come back to the result.
+The gap score is computed from the model's labels, not by the model: Addressed counts 1,
+Partially addressed 0.5, Potential gap or Possible conflict 0, and Insufficient evidence
+is left out of the score and shown as "Needs review".
+
+To change the app (Node 20 or newer):
+
+```sh
+cd frontend/app
+npm ci
+npm run dev     # http://localhost:5173, API calls proxied to the server on port 8000
+npm test        # unit tests for quote highlighting and version grouping
+npm run build   # type-check and rebuild dist/, which the server serves
+```
+
+The app's API is under `/api/app` (`me`, `library`, `jobs`, `compare`, `audit`) and is
+additive: the original endpoints are unchanged. The name and role sent with requests
+are self-declared display values for the audit trail, not authentication.
 
 ### Tokens and document visibility
 
@@ -189,8 +226,11 @@ downloaded model, and never download documents or models.
 
 ## Known limits
 
-The interface is plain JavaScript/HTML and has no automated browser tests. Tests do not
-measure BGE-M3 or Ollama answer quality; use the evaluation tool and manual review for
-that. Chunks are fixed 1,200-character windows that can split words. Persistent human
-review, report export, audit history, real identity management and database migrations
-are not implemented.
+The web app has unit tests for its logic but no automated browser tests in the suite; it
+was checked by a scripted browser walkthrough (see TEST_REPORT.md). Tests do not measure
+BGE-M3 or Ollama answer quality; use the evaluation tool and manual review for that.
+Chunks are fixed 1,200-character windows that can split words. AI jobs are held in
+server memory: a job running when the server restarts is lost and its audit entry is
+marked as interrupted, while finished results remain in the audit trail. Approving or rejecting
+findings, checklist tracking, report export, persona summaries, real identity management
+and database migrations are not implemented yet.

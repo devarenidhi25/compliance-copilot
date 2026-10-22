@@ -197,3 +197,28 @@ def test_existing_ai_endpoint_is_unchanged(client, monkeypatch):
 def test_console_and_app_pages(client):
     assert client.get('/console').status_code == 200 and 'Compliance Copilot' in client.get('/console').text
     assert client.get('/').status_code == 200
+
+
+def test_compare_returns_changes_with_lines_and_order(client):
+    old = upload(client, pdf('SYNTHETIC rule one.', 'SYNTHETIC rule two.'), headers=ADMIN, effective_date='2024-01-01').json()
+    new = upload(client, pdf('SYNTHETIC rule one.', 'SYNTHETIC inserted rule.', 'SYNTHETIC rule two.'), headers=ADMIN,
+                 family_id=old['family_id'], effective_date='2025-01-01').json()
+    result = client.get('/api/app/compare', params={'a':new['id'], 'b':old['id']}).json()
+    assert result['reordered'] is True and result['older']['id'] == old['id'] and result['newer']['id'] == new['id']
+    assert result['counts'] == {'added':1, 'removed':0, 'modified':0} and result['total_changes'] == 1
+    assert result['changes'][0]['added'] == ['SYNTHETIC inserted rule.'] and result['changes'][0]['new_pages'] == [2, 2]
+    assert result['changes'][0]['truncated'] is False and 'pdf' not in result['older']
+    assert client.get('/api/app/compare', params={'a':old['id'], 'b':old['id']}).status_code == 422
+    other = upload(client, pdf('SYNTHETIC unrelated.'), headers=ADMIN).json()
+    assert client.get('/api/app/compare', params={'a':old['id'], 'b':other['id']}).status_code == 422
+
+
+def test_restart_marks_unfinished_audit_entries_interrupted(client, tmp_path):
+    from backend.app.main import create_app
+    from backend.app.product import record_audit_start
+    store = client.app.state.store
+    record_audit_start(store, {'audit_id':'AUD-TEST-1', 'created_at':'2026-10-22T10:00:00+00:00', 'organization':'alpha', 'user':'A',
+                               'role':None, 'task':'qa', 'question':'cut off', 'document_ids':['x']})
+    create_app(store.engine.url.database)  # a restart on the same database
+    entry = client.get('/api/app/audit/AUD-TEST-1').json()
+    assert entry['status'] == 'failed' and 'server restart' in entry['error']

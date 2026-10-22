@@ -1,0 +1,166 @@
+import type { ReactNode } from 'react';
+import type { AIResult, Citation, Job, ResultItem } from '../lib/api';
+import { useLibrary, useSource } from '../context';
+import { duration, ErrorNote, Icon } from './ui';
+
+const STEPS: { stage: Job['stage']; label: string }[] = [
+  { stage: 'retrieving', label: 'Finding evidence' },
+  { stage: 'drafting', label: 'Drafting the answer' },
+  { stage: 'verifying', label: 'Checking every quote' },
+  { stage: 'completed', label: 'Ready' },
+];
+
+export function JobProgress({ job, onCancelView }: { job: Job; onCancelView?: () => void }) {
+  const current = STEPS.findIndex((s) => s.stage === job.stage);
+  return (
+    <section className="panel progress" aria-live="polite">
+      <div className="section-title">
+        <h2>{job.state === 'queued' ? 'Waiting for the model' : 'Working on it'}</h2>
+        <span className="muted small-text">{job.elapsed_seconds != null ? duration(job.elapsed_seconds) : ''}</span>
+      </div>
+      {job.state === 'queued' && (
+        <p>{job.queue_position && job.queue_position > 1 ? `${job.queue_position - 1} request(s) ahead of yours.` : 'Your request is next.'}</p>
+      )}
+      <ol className="steps">
+        {STEPS.map((step, i) => (
+          <li key={step.stage} className={job.state === 'queued' ? '' : i < current ? 'done' : i === current ? 'current' : ''}>{step.label}</li>
+        ))}
+      </ol>
+      <p className="muted small-text">
+        The model runs on this computer, so an answer can take a few minutes. You can open other pages; the result will be waiting here.
+      </p>
+      {onCancelView && <div><button className="button quiet small" onClick={onCancelView}>Stop waiting and ask something else</button></div>}
+    </section>
+  );
+}
+
+/** Assigns one number per distinct citation, in order of first use. */
+function numberCitations(items: ResultItem[]) {
+  const numbers = new Map<string, number>();
+  const list: Citation[] = [];
+  for (const item of items) {
+    for (const citation of item.citations) {
+      const key = `${citation.chunk_id}|${citation.quote}`;
+      if (!numbers.has(key)) {
+        numbers.set(key, list.length + 1);
+        list.push(citation);
+      }
+    }
+  }
+  return { list, numberOf: (c: Citation) => numbers.get(`${c.chunk_id}|${c.quote}`)! };
+}
+
+export function CitationButton({ citation, n }: { citation: Citation; n: number }) {
+  const { open } = useSource();
+  return (
+    <button className="cite" title={`Open source ${n} on page ${citation.page}`} aria-label={`Open source ${n}, page ${citation.page}`}
+      onClick={() => open({ documentId: citation.document_id, page: citation.page, quote: citation.quote, section: citation.section })}>
+      {n}
+    </button>
+  );
+}
+
+export function SourceList({ citations, numberOf }: { citations: Citation[]; numberOf: (c: Citation) => number }) {
+  const { open } = useSource();
+  const { byId } = useLibrary();
+  return (
+    <div className="sources">
+      {citations.map((citation) => {
+        const doc = byId.get(citation.document_id);
+        return (
+          <div className="source-row" key={`${citation.chunk_id}${citation.quote}`}>
+            <span className="num">{numberOf(citation)}</span>
+            <div>
+              <blockquote><span className="quote-mark">{citation.quote}</span></blockquote>
+              <div className="row small-text">
+                <span className="muted">
+                  {doc?.metadata.title.value ?? 'Document'}, {citation.section ? `section “${citation.section}”` : `page ${citation.page}`}
+                </span>
+                <button className="button quiet small" onClick={() => open({ documentId: citation.document_id, page: citation.page, quote: citation.quote, section: citation.section })}>
+                  Show in document
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function Rejected({ result }: { result: AIResult }) {
+  if (!result.rejected_items.length) return null;
+  return (
+    <details>
+      <summary>{result.rejected_items.length} statement{result.rejected_items.length > 1 ? 's' : ''} removed because the quote did not match the source</summary>
+      <ul className="small-text">
+        {result.rejected_items.map((item) => (
+          <li key={item.index}>{item.statement ? <>“{item.statement}” — </> : null}{item.reason}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+export function ResultFooter({ result }: { result: AIResult }) {
+  return (
+    <div className="stack" style={{ gap: 10, marginTop: 18 }}>
+      <Rejected result={result} />
+      {result.notes.length > 0 && (
+        <details>
+          <summary>How this answer was produced</summary>
+          <ul className="small-text">{result.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+          <p className="small-text muted">{result.limitations}</p>
+        </details>
+      )}
+      <p className="small-text muted">
+        Pending human review. Generated by {result.model} in {duration(result.generation_seconds)} from {result.evidence_excerpts} excerpts
+        {result.audit_id ? <>. Audit reference {result.audit_id}</> : null}.
+      </p>
+    </div>
+  );
+}
+
+/** Answers, checklists and change explanations: statements with numbered sources. */
+export function AnswerView({ result, heading }: { result: AIResult; heading: ReactNode }) {
+  const { list, numberOf } = numberCitations(result.items);
+  const asList = result.task === 'checklist';
+  return (
+    <section className="panel">
+      <div className="section-title">
+        <h2>{heading}</h2>
+        <span className="verified">{Icon.check} Every quote checked against the source</span>
+      </div>
+      {asList ? (
+        <ol className="answer">
+          {result.items.map((item, i) => (
+            <li key={i} className="answer-item">{item.statement}{item.citations.map((c) => <CitationButton key={c.chunk_id + c.quote} citation={c} n={numberOf(c)} />)}</li>
+          ))}
+        </ol>
+      ) : (
+        <div className="answer">
+          {result.items.map((item, i) => (
+            <p key={i} className="answer-item">{item.statement}{item.citations.map((c) => <CitationButton key={c.chunk_id + c.quote} citation={c} n={numberOf(c)} />)}</p>
+          ))}
+        </div>
+      )}
+      <h3 style={{ marginTop: 22, marginBottom: 6 }}>Sources</h3>
+      <SourceList citations={list} numberOf={numberOf} />
+      <ResultFooter result={result} />
+    </section>
+  );
+}
+
+export function JobOutcome({ job, children, onDismiss }: { job: Job | null; children: (result: AIResult) => ReactNode; onDismiss: () => void }) {
+  if (!job) return null;
+  if (job.state === 'queued' || job.state === 'running') return <JobProgress job={job} onCancelView={onDismiss} />;
+  if (job.state === 'failed') {
+    return (
+      <ErrorNote>
+        <strong>No result.</strong> {job.error}
+        <div style={{ marginTop: 8 }}><button className="button small" onClick={onDismiss}>Dismiss</button></div>
+      </ErrorNote>
+    );
+  }
+  return job.result ? <>{children(job.result)}</> : null;
+}

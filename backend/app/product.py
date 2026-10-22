@@ -16,6 +16,7 @@ values recorded in the audit trail; they are not authentication.
 """
 import asyncio
 import json
+import mimetypes
 import queue
 import threading
 import time
@@ -29,11 +30,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from .ai import generate
+from .compare import diff_hunks, order_versions, stored_pages
 from .retrieval import RetrievalError
 
 ROLES = {'compliance_officer':'Compliance Officer', 'legal':'Legal', 'risk':'Risk', 'executive':'Executive'}
 STAGES = ('queued', 'retrieving', 'drafting', 'verifying', 'completed')
 MAX_JOBS_KEPT = 200
+MAX_CHANGES = 300
+MAX_LINES_PER_CHANGE = 60
 
 # Deterministic mapping from the model's gap label to what the reviewer sees.
 # Weight feeds the compliance score; None = not assessed (excluded from it).
@@ -204,6 +208,9 @@ def ensure_audit_table(store):
     with store.engine.begin() as conn:
         for statement in AUDIT_SCHEMA:
             conn.execute(text(statement))
+        # Jobs live in server memory; any still open at startup were cut off by a restart.
+        conn.execute(text("UPDATE audit_log SET status='failed', finished_at=:now, "
+                          "error='Interrupted by a server restart before it finished' WHERE status='queued'"), {'now':now()})
 
 
 def record_audit_start(store, job):
@@ -245,6 +252,10 @@ def page_counts(store):
 
 def install(app, principal):
     """Create the audit table and register the product routes on an app."""
+    # Windows can map script types wrongly in its registry; browsers refuse to run
+    # module scripts (the app and the PDF worker) served with the wrong type.
+    for extension, kind in (('.js', 'text/javascript'), ('.mjs', 'text/javascript'), ('.css', 'text/css')):
+        mimetypes.add_type(kind, extension)
     ensure_audit_table(app.state.store)
     app.state.job_runner = JobRunner()
     router = APIRouter(prefix='/api/app', tags=['product'])
@@ -294,6 +305,23 @@ def install(app, principal):
     @router.get('/jobs/{job_id}')
     def job_status(job_id: str, request: Request, user=Depends(principal)):
         return request.app.state.job_runner.view(job_id, user.org)
+
+    @router.get('/compare')
+    def compare(a: str, b: str, request: Request, user=Depends(principal)):
+        store = request.app.state.store
+        first, second = store.get_metadata(a, user.org), store.get_metadata(b, user.org)
+        if a == b or first['family_id'] != second['family_id']:
+            raise ValueError('Select two different versions of the same document')
+        older, newer, swapped = order_versions(first, second)
+        hunks = diff_hunks(stored_pages(store, older['id']), stored_pages(store, newer['id']))
+        counts = {kind:sum(h['change'] == kind for h in hunks) for kind in ('added', 'removed', 'modified')}
+        changes = []
+        for hunk in hunks[:MAX_CHANGES]:
+            truncated = len(hunk['removed']) > MAX_LINES_PER_CHANGE or len(hunk['added']) > MAX_LINES_PER_CHANGE
+            changes.append({**hunk, 'removed':hunk['removed'][:MAX_LINES_PER_CHANGE], 'added':hunk['added'][:MAX_LINES_PER_CHANGE],
+                            'truncated':truncated})
+        return {'older':store.describe(older), 'newer':store.describe(newer), 'reordered':swapped,
+                'changes':changes, 'total_changes':len(hunks), 'counts':counts}
 
     @router.get('/audit')
     def audit_list(request: Request, limit: int = 50, user=Depends(principal)):
