@@ -92,6 +92,8 @@ class Store:
     def describe(row):
         row.pop('pdf', None)
         row['metadata'] = json.loads(row['metadata'])
+        if 'organization' in row:
+            row['visibility'] = 'shared' if row['organization'] is None else 'organization'
         return row
 
     def get(self, identifier, organization):
@@ -108,7 +110,7 @@ class Store:
                 raise LookupError('Document not found')
             return dict(row)
 
-    def ingest(self, data, metadata, organization, verified_source=None, source_metadata=None):
+    def ingest(self, data, metadata, organization, verified_source=None, source_metadata=None, shared=None):
         if len(data) > 20 * 1024 * 1024:
             raise ValueError('PDF exceeds 20 MiB limit')
         if not data.startswith(b'%PDF-'):
@@ -124,11 +126,9 @@ class Store:
             raise ValueError('No extractable text. Run OCR locally and upload a searchable PDF.')
         if sum(map(len, pages)) > 10_000_000:
             raise ValueError('Extracted text exceeds limit')
-        if not self.allow_synthetic and (metadata.title.upper().startswith('SYNTHETIC') or any('SYNTHETIC KYC SOP' in p.upper() or 'SYNTHETIC DEMONSTRATION ONLY' in p.upper() for p in pages)):
-            raise ValueError('Synthetic documents belong in the isolated test/demo database')
-        return self._store_extracted(data, metadata, organization, pages, verified_source, source_metadata)
+        return self._store_extracted(data, metadata, organization, pages, verified_source, source_metadata, shared=shared)
 
-    def ingest_html(self, data, metadata, organization, sections, verified_source=None, source_metadata=None):
+    def ingest_html(self, data, metadata, organization, sections, verified_source=None, source_metadata=None, shared=None):
         if len(data) > 20 * 1024 * 1024:
             raise ValueError('HTML document exceeds 20 MiB limit')
         sections = [(str(title or '').strip(), str(content or '').strip()) for title, content in sections]
@@ -140,15 +140,24 @@ class Store:
         pages = [f'{title}\n{content}' if title else content for title, content in sections]
         return self._store_extracted(data, metadata, organization, pages, verified_source,
                                      {**(source_metadata or {}), 'original_format':'html'},
-                                     section_names=[title or f'Section {i+1}' for i, (title, _) in enumerate(sections)])
+                                     section_names=[title or f'Section {i+1}' for i, (title, _) in enumerate(sections)], shared=shared)
 
     def _store_extracted(self, data, metadata, organization, pages, verified_source=None,
-                         source_metadata=None, section_names=None):
+                         source_metadata=None, section_names=None, shared=None):
+        """Store an extracted document version.
+
+        Internal documents always belong to the organization. Regulatory documents
+        join the shared library only when shared is true (administrator uploads)
+        or, by default, when fetched from a verified official source; otherwise
+        they stay private to the uploading organization.
+        """
         if not self.allow_synthetic and (metadata.title.upper().startswith('SYNTHETIC') or any('SYNTHETIC KYC SOP' in p.upper() or 'SYNTHETIC DEMONSTRATION ONLY' in p.upper() for p in pages)):
             raise ValueError('Synthetic documents belong in the isolated test/demo database')
         doc_id = str(uuid.uuid4())
         family_id = metadata.family_id or str(uuid.uuid4())
-        scope = organization if metadata.kind == 'internal' else None
+        if shared is None:
+            shared = bool(verified_source)
+        scope = None if metadata.kind == 'regulatory' and shared else organization
         fields = {}
         for key in ['title', 'regulator', 'document_type', 'source_url', 'publication_date', 'version', 'effective_date']:
             value = getattr(metadata, key)
@@ -164,10 +173,18 @@ class Store:
         digest = hashlib.sha256(data).hexdigest()
         with self.engine.begin() as conn:
             previous = conn.execute(text('SELECT organization,kind,metadata FROM documents WHERE family_id=:id LIMIT 1'), {'id': family_id}).mappings().first()
-            if metadata.family_id and not previous:
-                raise ValueError('Select an existing family ID or omit it to create a new family')
-            if previous and (previous['organization'] != scope or previous['kind'] != metadata.kind or json.loads(previous['metadata'])['regulator']['value'] != metadata.regulator):
-                raise ValueError('Version family must have the same scope, kind and regulator')
+            if metadata.family_id:
+                # One message for missing and foreign families, so errors do not
+                # reveal which private family IDs exist.
+                if not previous or previous['organization'] not in (None, organization):
+                    raise ValueError('Version family not found among your accessible documents; omit the family ID to create a new family')
+                if previous['organization'] is None and scope is not None:
+                    raise ValueError('This family is in the shared regulatory library; only an administrator can add versions to it. '
+                                     'Omit the family ID to store your copy privately for your organization.')
+                if previous['organization'] is not None and scope is None:
+                    raise ValueError('This family is private to an organization; shared versions need their own family')
+                if previous['kind'] != metadata.kind or json.loads(previous['metadata'])['regulator']['value'] != metadata.regulator:
+                    raise ValueError('Version family must have the same kind and regulator')
             duplicate = conn.execute(text('SELECT id FROM documents WHERE family_id=:family AND content_hash=:hash'), {'family': family_id, 'hash': digest}).scalar()
             if duplicate:
                 raise ValueError(f'Identical version already stored: {duplicate}')

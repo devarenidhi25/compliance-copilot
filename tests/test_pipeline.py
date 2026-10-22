@@ -28,6 +28,7 @@ def pdf(*pages):
 @pytest.fixture
 def client(tmp_path,monkeypatch):
     monkeypatch.setenv('COPILOT_ORG_TOKENS',json.dumps({'alpha':'alpha-secret','beta':'beta-secret'}))
+    monkeypatch.setenv('COPILOT_ADMIN_TOKENS',json.dumps({'alpha':'alpha-admin'}))
     app = create_app(str(tmp_path/'test.sqlite'))
     # Synthetic fixtures are explicitly enabled only on this isolated test store.
     app.state.store.allow_synthetic = True
@@ -37,12 +38,15 @@ def client(tmp_path,monkeypatch):
         yield c
 
 
-def upload(client,content=None,**meta):
+def upload(client,content=None,headers=None,**meta):
     metadata={'title':'SYNTHETIC test regulation','kind':'regulatory','regulator':'RBI',**meta}
-    response = client.post('/api/documents/upload', files={'file':('fixture.pdf',content or pdf('SYNTHETIC test rule: record the demo identifier.','SYNTHETIC page two: review the demo register.'),'application/pdf')},data={'metadata':json.dumps(metadata)})
+    response = client.post('/api/documents/upload', files={'file':('fixture.pdf',content or pdf('SYNTHETIC test rule: record the demo identifier.','SYNTHETIC page two: review the demo register.'),'application/pdf')},data={'metadata':json.dumps(metadata)},headers=headers)
     if response.status_code == 201:
         synchronize(client.app.state.retrieval)
     return response
+
+
+ADMIN={'Authorization':'Bearer alpha-admin'}
 
 
 def test_empty_and_auth(client):
@@ -255,7 +259,7 @@ def test_search_api_filters_status_and_pending(client):
 
 def test_search_and_generation_cannot_use_foreign_policy(client,monkeypatch):
     private=upload(client,kind='internal',regulator=None).json()
-    reg=upload(client).json()
+    reg=upload(client,headers=ADMIN).json()
     client.headers['Authorization']='Bearer beta-secret'
     result=client.post('/api/retrieval/search',json={'query':'record','mode':'hybrid'})
     assert {c['document_id'] for c in result.json()['results']}=={reg['id']}
@@ -407,10 +411,16 @@ def test_qa_reports_ignored_internal_documents(client,monkeypatch):
 
 def test_ai_disables_thinking_and_honours_chunk_limit(client,monkeypatch):
     monkeypatch.setenv('AI_CHUNKS_PER_DOCUMENT','1')
+    import backend.app.ai as module
     doc=upload(client).json()
-    chunk=client.get(f"/api/documents/{doc['id']}/chunks").json()[0]
     captured=[]
-    mock_model(monkeypatch,{'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':chunk['id'],'quote':chunk['content']}]}]},captured)
+    original=httpx.AsyncClient
+    def respond(request):
+        body=json.loads(request.content); captured.append(body)
+        sent=json.loads(body['messages'][1]['content'])['evidence'][0]
+        payload={'items':[{'statement':'SYNTHETIC','citations':[{'chunk_id':sent['chunk_id'],'quote':sent['text']}]}]}
+        return httpx.Response(200,json={'message':{'content':json.dumps(payload)}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
     response=client.post('/api/ai',json={'task':'qa','question':'record review','document_ids':[doc['id']]})
     assert response.status_code==200,response.text
     assert captured[0]['think'] is False
@@ -440,3 +450,49 @@ def test_ai_reports_specific_ollama_failures(client,monkeypatch,failure,expected
     response=client.post('/api/ai',json={'task':'qa','question':'record','document_ids':[doc['id']]})
     assert response.status_code==503
     assert expected in response.json()['detail'],response.json()['detail']
+
+
+def test_tenant_regulatory_upload_is_private_until_admin(client):
+    tenant=upload(client,pdf('SYNTHETIC tenant copy of a circular.')).json()
+    assert tenant['organization']=='alpha' and tenant['visibility']=='organization'
+    shared=upload(client,pdf('SYNTHETIC administrator circular.'),headers=ADMIN).json()
+    assert shared['organization'] is None and shared['visibility']=='shared'
+    client.headers['Authorization']='Bearer beta-secret'
+    visible={d['id'] for d in client.get('/api/documents').json()['documents']}
+    assert visible=={shared['id']}
+    assert client.get(f"/api/documents/{tenant['id']}/chunks").status_code==404
+    found=client.post('/api/retrieval/search',json={'query':'circular','mode':'bm25'}).json()['results']
+    assert {c['document_id'] for c in found}=={shared['id']} and found[0]['visibility']=='shared'
+    # Tenants cannot add versions to a shared family; administrators can.
+    response=upload(client,pdf('SYNTHETIC tenant revision.'),family_id=shared['family_id'])
+    assert response.status_code==422 and 'only an administrator' in response.json()['detail']
+    client.headers['Authorization']='Bearer alpha-secret'
+    assert upload(client,pdf('SYNTHETIC admin revision.'),family_id=shared['family_id'],headers=ADMIN).status_code==201
+
+
+def test_admin_token_still_identifies_its_organization(client):
+    policy=upload(client,kind='internal',regulator=None,headers=ADMIN).json()
+    assert policy['organization']=='alpha'
+    assert client.get(f"/api/documents/{policy['id']}/chunks").status_code==200
+
+
+def test_import_is_shared(client,monkeypatch):
+    import backend.app.main as module
+    async def fake_fetch(url): return pdf('SYNTHETIC official import.'),'SEBI'
+    monkeypatch.setattr(module,'fetch_pdf',fake_fetch)
+    response=client.post('/api/documents/import',json={'url':'https://www.sebi.gov.in/a.pdf','metadata':{'title':'SYNTHETIC import','kind':'regulatory','regulator':'SEBI'}})
+    assert response.json()['visibility']=='shared'
+
+
+def test_family_errors_do_not_reveal_foreign_families(client):
+    private=upload(client,kind='internal',regulator=None).json()
+    client.headers['Authorization']='Bearer beta-secret'
+    foreign=upload(client,kind='internal',regulator=None,family_id=private['family_id']).json()['detail']
+    missing=upload(client,kind='internal',regulator=None,family_id='does-not-exist').json()['detail']
+    assert foreign==missing
+
+
+def test_malformed_token_configuration_fails_at_startup(tmp_path,monkeypatch):
+    monkeypatch.setenv('COPILOT_ORG_TOKENS','{team: token}')
+    with pytest.raises(RuntimeError,match='COPILOT_ORG_TOKENS must be JSON'):
+        create_app(str(tmp_path/'bad.sqlite'))

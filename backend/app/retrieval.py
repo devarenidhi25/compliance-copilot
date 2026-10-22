@@ -126,7 +126,7 @@ class Retrieval:
             for chunk in self.store.chunks(doc['id'], org):
                 if not chunk['content'].strip():
                     continue
-                chunks.append({**chunk, 'family_id':doc['family_id'], 'version_id':doc['id'], 'version':doc['metadata']['version'], 'metadata':doc['metadata'], 'kind':doc['kind'], 'organization':doc['organization'], 'content_hash':doc['content_hash'], 'pdf_reference':f"/api/documents/{doc['id']}/pdf#page={chunk['page']}"})
+                chunks.append({**chunk, 'family_id':doc['family_id'], 'version_id':doc['id'], 'version':doc['metadata']['version'], 'metadata':doc['metadata'], 'kind':doc['kind'], 'organization':doc['organization'], 'visibility':doc.get('visibility'), 'content_hash':doc['content_hash'], 'pdf_reference':f"/api/documents/{doc['id']}/pdf#page={chunk['page']}"})
         return matched, chunks
 
     def ready(self, docs, chunks):

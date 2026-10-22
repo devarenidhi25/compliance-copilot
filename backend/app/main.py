@@ -3,7 +3,7 @@ import hmac
 import json
 import os
 from datetime import date
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -69,20 +69,50 @@ class CitationRequest(BaseModel):
     quote: str
 
 
+class Principal(NamedTuple):
+    org: str
+    is_admin: bool
+
+
+def token_config():
+    """Parse COPILOT_ORG_TOKENS and COPILOT_ADMIN_TOKENS ({"organization": "token"})."""
+    parsed = []
+    for variable in ('COPILOT_ORG_TOKENS', 'COPILOT_ADMIN_TOKENS'):
+        try:
+            value = json.loads(os.getenv(variable) or '{}')
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f'{variable} must be JSON like {{"your-organization":"token"}}: {exc}') from exc
+        if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+            raise RuntimeError(f'{variable} must map organization names to token strings')
+        parsed.append(value)
+    return tuple(parsed)
+
+
 def create_app(db_path=None):
     app = FastAPI(title='Compliance Copilot document pipeline')
     store = Store(db_path or os.getenv('COPILOT_DB','data/corpus.sqlite3'))
     app.state.store = store
     app.state.retrieval = Retrieval(store)
 
-    def organization(authorization: str = Header(default='')):
+    token_config()  # Fail at startup, not per request, on malformed token JSON.
+
+    def principal(authorization: str = Header(default='')):
         # Server-side token mapping: clients cannot choose another organization's scope.
-        tokens = json.loads(os.getenv('COPILOT_ORG_TOKENS','{}'))
+        org_tokens, admin_tokens = token_config()
         token = authorization.removeprefix('Bearer ')
-        for org, expected in tokens.items():
-            if expected and hmac.compare_digest(token, expected):
-                return org
+        for tokens, is_admin in ((admin_tokens, True), (org_tokens, False)):
+            for org, expected in tokens.items():
+                if expected and hmac.compare_digest(token, expected):
+                    return Principal(org, is_admin)
         raise HTTPException(401, 'Configure COPILOT_ORG_TOKENS and supply your organization bearer token')
+
+    def organization(user: Principal = Depends(principal)):
+        return user.org
+
+    def administrator(user: Principal = Depends(principal)):
+        if not user.is_admin:
+            raise HTTPException(403, 'Administrator token required (COPILOT_ADMIN_TOKENS)')
+        return user
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
@@ -117,10 +147,12 @@ def create_app(db_path=None):
         return {'documents':docs, 'regulatory_empty':not any(d['kind']=='regulatory' for d in docs), 'message':'Upload a regulatory PDF or import an official RBI/SEBI PDF to begin.' if not docs else None}
 
     @app.post('/api/documents/upload', status_code=201)
-    async def upload(file: UploadFile = File(), metadata: str = Form(), org=Depends(organization)):
+    async def upload(file: UploadFile = File(), metadata: str = Form(), user: Principal = Depends(principal)):
         parsed = Metadata.model_validate_json(metadata)
         data = await file.read(20*1024*1024+1)
-        return store.ingest(data, parsed, org)
+        # Unverified regulatory uploads stay private to the uploader's organization
+        # unless an administrator adds them to the shared library.
+        return store.ingest(data, parsed, user.org, shared=user.is_admin)
 
     @app.post('/api/documents/import', status_code=201)
     async def import_document(body: ImportRequest, org=Depends(organization)):
@@ -132,7 +164,7 @@ def create_app(db_path=None):
             raise HTTPException(502, 'Official source unavailable; upload a manually downloaded PDF if permitted') from exc
         if regulator != body.metadata.regulator:
             raise ValueError('Selected regulator does not match official host')
-        return store.ingest(data, body.metadata, org, verified_source=body.url)
+        return store.ingest(data, body.metadata, org, verified_source=body.url, shared=True)
 
     @app.get('/api/documents/{identifier}/chunks')
     def chunks(identifier: str, org=Depends(organization)):
