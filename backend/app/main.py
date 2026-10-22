@@ -9,12 +9,14 @@ from typing import Literal, NamedTuple
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .compare import diff_hunks, order_versions, page_lines, stored_pages
 from .importer import fetch_pdf
 from .index_cli import synchronize
-from .paths import FRONTEND_INDEX, corpus_path
+from .paths import APP_INDEX, FRONTEND_INDEX, corpus_path
+from .product import install as install_product_api
 from .store import Store
 from .retrieval import Retrieval, RetrievalError
 from starlette.concurrency import run_in_threadpool
@@ -176,7 +178,14 @@ def create_app(db_path=None):
 
     @app.get('/', include_in_schema=False)
     def home():
+        # The client-facing app when it has been built; otherwise the developer console.
+        return FileResponse(APP_INDEX if APP_INDEX.exists() else FRONTEND_INDEX)
+
+    @app.get('/console', include_in_schema=False)
+    def console():
         return FileResponse(FRONTEND_INDEX)
+
+    app.mount('/assets', StaticFiles(directory=APP_INDEX.parent / 'assets', check_dir=False), name='app-assets')
 
     @app.get('/api/documents')
     def documents(org=Depends(organization)):
@@ -269,6 +278,7 @@ def create_app(db_path=None):
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
 
+    install_product_api(app, principal)
     return app
 
 

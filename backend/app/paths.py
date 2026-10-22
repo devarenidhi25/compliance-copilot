@@ -9,6 +9,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_INDEX = REPO_ROOT / 'frontend' / 'index.html'
+# The client-facing app, built from frontend/app with `npm run build`.
+APP_INDEX = REPO_ROOT / 'frontend' / 'app' / 'dist' / 'index.html'
 DEFAULT_REGISTRY = REPO_ROOT / 'datasets' / 'official_sources.json'
 DEFAULT_INGESTION_REPORT = REPO_ROOT / 'data' / 'ingestion-report.json'
 
