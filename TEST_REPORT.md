@@ -1,98 +1,85 @@
-# Verification — 14 October 2026
+# Verification — 22 October 2026
 
-## Results
+## Automated tests
 
-Verified pre-change baseline: **28 passed**, six dependency deprecation warnings.
-Retrieval-only gate, before workflow integration: **7 passed**, six warnings.
-Final full suite: **45 passed, 0 failed**, six warnings, in **6.73 seconds**.
-
-Exact test commands:
+Full suite: **90 passed, 0 failed** (Linux, Python 3.13).
 
 ```sh
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest tests/test_retrieval.py -q
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q
 ```
 
-Tests ran outside the sandbox because the prior sandboxed FastAPI threaded client
-stalled. Plugin autoload remains disabled to avoid unrelated host ROS plugins.
-Intermediate full runs passed 35, 43, and 44 tests before the final additions.
+`tests/conftest.py` points the database, Chroma and model paths at temporary folders
+for every test, so the suite never writes to `data/` and is not affected by a model
+downloaded on the developer's machine (previously, a downloaded model made the
+missing-model test fail).
 
-Other executed checks:
+Also run: frontend script syntax check (`node --check` on the page's module script),
+and the server started with `uvicorn backend.app.main:app` from a directory other than
+the repository root (page served, API answered, tenant token refused on the admin
+endpoint).
 
-```sh
-.venv/bin/python -m compileall -q backend tests
-node --input-type=module --check < <(sed -n '/<script type="module">/,/<\/script>/p' frontend/index.html | sed '1d;$d')
-.venv/bin/pip check
-.venv/bin/python -m backend.app.index_cli --help
-```
+## What the tests cover
 
-All passed. Dependency imports for Sentence Transformers, Chroma and CPU PyTorch
-passed; PyTorch reports `2.8.0+cpu`. Read-only production database inspection reports
-**0 documents and 0 chunks**. No BGE-M3 weights were downloaded.
+Carried over: ingestion, hashing, metadata provenance, page/chunk mapping, version
+families, duplicate rejection, citations, official URL restrictions and import,
+organization isolation, BM25/semantic/hybrid retrieval and RRF, persistent Chroma,
+index sync/rebuild/failure handling, model download and local-only loading, crawler
+discovery and versioning, and all four AI workflows with mocked model output.
 
-The first dependency installation failed with an assertion in pip 22's resolver.
-Upgrading the virtual environment to pip 25.2 and installing the pinned requirements
-resolved it. `pip check` reports no broken requirements. Six test warnings concern
-PyMuPDF SWIG types and Starlette's deprecated AnyIO portal alias; they are not test failures.
+Added in this round:
 
-## Coverage
+- **Citations:** whitespace and curly-quote/dash tolerant matching that returns the
+  exact original span; too-short quotes rejected.
+- **AI generation:** compact evidence; `num_ctx` and `think: false` sent to Ollama;
+  prompt budget trimming (weakest evidence first, one excerpt per document kept,
+  page differences capped); per-item validation with `rejected_items`; gap items need
+  one regulatory and one internal citation; Q&A notes ignored internal documents;
+  specific errors for timeout, unreachable Ollama, out-of-memory, missing model,
+  non-JSON and empty output; `AI_CHUNKS_PER_DOCUMENT`.
+- **Search:** unfiltered search skips and reports unindexed documents; explicit
+  selection still fails closed.
+- **Visibility:** tenant regulatory uploads private, admin uploads and imports shared,
+  tenants blocked from shared families, identical errors for missing and foreign
+  families, malformed token JSON rejected at startup.
+- **Comparison:** an inserted page is one change; date-based version ordering; API
+  change list; AI comparison sends aligned changes and changed-page evidence.
+- **Crawler:** "Read more" not treated as pagination; postback pagination reported;
+  download errors vs. extraction failures classified by stage; 20 MiB streaming cap;
+  4xx not retried; gzip decoded once.
+- **Portability:** importing the app creates nothing; repository-root path defaults;
+  frontend served from any working directory; in-server admin index job.
+- **Hardening:** sandboxed HTML sources, `nosniff`, database indexes, foreign keys.
+- **Evaluation:** hit@k/MRR@k computation, unavailable-mode reporting, and a check
+  that the bundled question file matches the bundled PDF's hash.
 
-The original ingestion, hash, metadata provenance, PDF-byte persistence, page/chunk,
-version-family, duplicate rejection, citation, official URL/import and organization
-isolation tests remain passing.
+## End-to-end checks on the real SEBI LODR Master Circular (291 pages)
 
-New coverage verifies:
+Run through the HTTP API with the test embedder and a stand-in for Ollama:
+administrator upload (shared, 4.5 s); visible to another organization; tenant refused
+on the index job; in-server index job completed; hybrid search returned results;
+AI Q&A accepted a grounded item and rejected a fabricated quotation with its reason;
+an administrator added a second version (one page inserted, one removed) while a
+tenant was refused; comparison reordered the versions by date and reported exactly two
+changes with correct page numbers; the unindexed second version was keyword-searched
+and reported. For four selected documents the AI prompt is about 20,000 characters
+(previously about 58,000); the line-aligned diff of the full circular takes 0.24 s.
 
-- Independent BM25 and semantic rankings over actual stored synthetic chunks.
-- Deterministic RRF scores, tie handling and duplicate-result suppression.
-- Regulator, document UUID, version label, family and document-type filters.
-- Real persistent Chroma storage, restart reads and idempotent synchronization.
-- Pending-document state, configuration mismatch, successful rebuilds, failed
-  rebuilds preserving the active manifest, missing-vector failures, and model
-  configuration changes during search/indexing failing closed.
-- Exact physical page-two citations and omission of blank-page chunks.
-- Empty corpus, missing model setup, local-only model load errors, and explicit
-  mocked download activation of an exact snapshot revision.
-- Retrieval and generation isolation across organizations, including explicit
-  foreign document IDs.
-- All four AI workflows using hybrid-retrieved stored evidence; invented quotation
-  rejection, missing paired evidence, unavailable Ollama and invalid assessment
-  labels (including wrong JSON types).
-- Public search/status APIs, filter validation, index readiness and rejection of
-  generation from documents not yet indexed.
+Retrieval evaluation (`datasets/eval/lodr_master_circular.json`, 12 questions),
+BM25 only: **hit@6 0.833, MRR@6 0.750**. Semantic and hybrid scores need the
+BGE-M3 weights and should be recorded on a machine that has them.
 
-## Files changed
+## Live run on a team machine (Windows, CPU only)
 
-Modified: `backend/app/store.py`, `backend/app/main.py`, `backend/app/ai.py`,
-`backend/requirements.txt`, `frontend/index.html`, `tests/test_pipeline.py`,
-`README.md`, `datasets/README.md`, and `TEST_REPORT.md`.
+With qwen3:8b, regulatory Q&A on the circular ("What is the timeline for disclosing
+material events to stock exchanges?") returned a cited answer giving the 30-minute,
+12-hour and 24-hour disclosure timelines with no rejected items. That run used Phase 1
+and the thinking/error-reporting fix. Before those fixes the same request failed:
+qwen3's thinking mode produced an empty JSON object and generation exceeded the
+300-second timeout at about 3.7 output tokens per second.
 
-Added: `backend/app/retrieval.py`, `backend/app/index_cli.py`,
-`tests/test_retrieval.py`, `tests/__init__.py`, `tests/fixtures/embedding.py`,
-and `tests/fixtures/README.md`.
+## Not verified here
 
-The existing synthetic SOP files remain in the dedicated fixture directory;
-application code never imports the test embedding implementation or seeds fixtures.
-
-## Limits and next stage
-
-Semantic tests use real Chroma with deterministic **test-only** vectors. They verify
-index/query mechanics and integration, not real BGE-M3 model quality. Model download
-is mocked in its unit test. Actual BGE-M3 inference, real Ollama generation, official
-PDF fetching and interactive browser end-to-end behavior were not verified.
-Browser checks cover script syntax and the served page/API, not UI interaction.
-
-Configuration/setup is documented in README.md: `EMBEDDING_MODEL`,
-`EMBEDDING_MODEL_PATH`, `EMBEDDING_DEVICE`, `CHROMA_PATH`, existing `COPILOT_DB`,
-`COPILOT_ORG_TOKENS`, `OLLAMA_MODEL`, and `OLLAMA_URL`. Explicitly download BGE-M3,
-then ingest actual official PDFs and synchronize the index. Separately install
-Ollama and pull the configured model before live generation.
-
-This remains a local development application with bounded evidence excerpts, an
-in-memory BM25 candidate index, Linux writer locking, and retained old Chroma
-collections. Citation validation cannot prove legal accuracy or completeness.
-React/Vite, enterprise membership/authentication, Alembic migrations, persistent
-human approvals/audit history and report export remain unimplemented.
-
-Next recommended stage: persist human-review decisions and their evidence snapshots,
-with audit history, before adding report export and a larger frontend.
+Real BGE-M3 inference and semantic/hybrid evaluation scores, real Ollama output beyond
+the single live Q&A above, live crawling of RBI/SEBI sites, and interactive browser
+behavior (the new admin panel, quote validation prompt and sandboxed HTML viewer were
+syntax-checked, not clicked through).
