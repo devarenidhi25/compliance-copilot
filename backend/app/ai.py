@@ -4,16 +4,15 @@ Every accepted item must carry quotations that validate against stored chunks.
 Invalid items are dropped and reported; the request fails only when no item
 survives validation.
 """
-import difflib
 import json
 import os
 import time
 
 import httpx
-from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
 from .retrieval import Retrieval
+from .compare import diff_hunks, order_versions, page_set, render, stored_pages
 from .store import collapse_whitespace
 
 TASKS = {'qa','comparison','gap_analysis','checklist'}
@@ -34,7 +33,7 @@ SYSTEM_PROMPT = (
     'For gaps say "not located in the selected excerpts", never claim absence from the whole policy. '
     'Missing retrieved evidence is not proof of noncompliance. '
     'For gap analysis use exactly one permitted assessment label per item and cite at least one regulatory and one internal excerpt. '
-    'For comparisons cite both versions and focus on the provided stored-page differences. '
+    'For comparisons the first document is the earlier version; cite both versions and focus on the provided differences (- removed, + added). '
     'For checklist items propose concrete reviewable actions. '
     'Return only the requested JSON object. No unsupported summary.'
 )
@@ -72,28 +71,23 @@ def compact(chunk):
     return item
 
 
-def page_differences(store, docs):
-    with store.engine.connect() as conn:
-        pages = [[row[0] for row in conn.execute(text('SELECT content FROM pages WHERE document_id=:id ORDER BY number'), {'id':d['id']})] for d in docs]
-    differences = []
-    for index in range(max(map(len, pages))):
-        old = pages[0][index] if index < len(pages[0]) else ''
-        new = pages[1][index] if index < len(pages[1]) else ''
-        if old != new:
-            diff = '\n'.join(difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm=''))
-            differences.append({'physical_page':index+1, 'old_document':docs[0]['id'], 'new_document':docs[1]['id'],
-                                'diff':collapse_whitespace_lines(diff)[:3000]})
-    return differences[:10]
+MAX_DIFFERENCES = 10
 
 
-def collapse_whitespace_lines(value):
-    return '\n'.join(collapse_whitespace(line) for line in value.splitlines() if line.strip())
+def version_differences(store, docs):
+    """Line-aligned changes between the older (docs[0]) and newer (docs[1]) version."""
+    hunks = diff_hunks(stored_pages(store, docs[0]['id']), stored_pages(store, docs[1]['id']))
+    differences = [{'change':h['change'], 'old_document':docs[0]['id'], 'old_pages':h['old_pages'],
+                    'new_document':docs[1]['id'], 'new_pages':h['new_pages'], 'diff':render(h)} for h in hunks]
+    return differences[:MAX_DIFFERENCES], len(differences)
 
 
 def prioritize_changed_pages(store, docs, chunks, differences, org, limit=CHUNKS_PER_DOCUMENT):
-    changed_pages = {d['physical_page'] for d in differences}
+    """Put chunks from changed pages first (per version), then the retrieved evidence."""
+    changed_pages = {docs[0]['id']:page_set(d['old_pages'] for d in differences),
+                     docs[1]['id']:page_set(d['new_pages'] for d in differences)}
     for document in docs:
-        changed = [c for c in store.chunks(document['id'], org) if c['page'] in changed_pages and c['content'].strip()][:3]
+        changed = [c for c in store.chunks(document['id'], org) if c['page'] in changed_pages[document['id']] and c['content'].strip()][:3]
         existing = [c for c in chunks if c['document_id'] == document['id']]
         chunks = [c for c in chunks if c['document_id'] != document['id']]
         unique = {c['id']:c for c in changed + existing}
@@ -220,10 +214,15 @@ async def generate(store, body, org, retrieval=None):
         raise ValueError('Upload/import a regulatory PDF and select it before generating results')
     if body.task == 'comparison' and (len(docs)!=2 or len(regulatory)!=2 or docs[0]['family_id']!=docs[1]['family_id']):
         raise ValueError('Comparison requires two distinct regulatory versions in one family')
+    if body.task == 'comparison':
+        older, newer, swapped = order_versions(*docs)
+        docs = [older, newer]
     if body.task == 'gap_analysis' and not internal:
         raise ValueError('Select an internal policy belonging to your organization')
     config = settings()
     notes = []
+    if body.task == 'comparison' and swapped:
+        notes.append(f"Versions were ordered by date: {older['id']} is treated as the earlier version.")
     if body.task == 'qa' and internal:
         notes.append(f'Q&A answers from regulatory documents only; {len(internal)} selected internal document(s) were not used.')
         docs = regulatory
@@ -232,7 +231,11 @@ async def generate(store, body, org, retrieval=None):
         raise ValueError('No extractable evidence available')
     differences = None
     if body.task == 'comparison':
-        differences = page_differences(store, docs)
+        differences, total = await run_in_threadpool(version_differences, store, docs)
+        if total > len(differences):
+            notes.append(f'{total} changed passages found; the first {len(differences)} were sent to the model.')
+        if not differences:
+            notes.append('The stored text of the two versions is identical after whitespace normalization.')
         chunks = prioritize_changed_pages(store, docs, chunks, differences, org, config['chunks_per_document'])
     prompt = {
         'task':body.task, 'question':body.question, 'stored_page_differences':differences,
@@ -268,7 +271,7 @@ async def generate(store, body, org, retrieval=None):
     if rejected:
         notes.append(f'{len(rejected)} model item(s) were rejected by citation validation and are not shown as findings.')
     limitations = ('Hybrid BM25/local semantic retrieval with RRF. Selected excerpts may omit relevant provisions; '
-                   'comparison hints cover at most ten changed physical pages. Citation validation checks provenance '
+                   'comparison hints cover at most ten changed passages. Citation validation checks provenance '
                    '(whitespace-insensitive), not whether the interpretation is correct. Human review required.')
     return {'task':body.task, 'items':items, 'rejected_items':rejected, 'notes':notes,
             'model':config['model'], 'generation_seconds':elapsed, 'evidence_excerpts':len(prompt['evidence']),

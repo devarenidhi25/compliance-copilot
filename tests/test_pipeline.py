@@ -496,3 +496,60 @@ def test_malformed_token_configuration_fails_at_startup(tmp_path,monkeypatch):
     monkeypatch.setenv('COPILOT_ORG_TOKENS','{team: token}')
     with pytest.raises(RuntimeError,match='COPILOT_ORG_TOKENS must be JSON'):
         create_app(str(tmp_path/'bad.sqlite'))
+
+
+def test_inserted_page_is_one_change_not_every_later_page():
+    from backend.app.compare import diff_hunks
+    old=[f'Paragraph {i}: rule text for page {i}.' for i in range(1,6)]
+    new=old[:1]+['Paragraph X: newly inserted page.']+old[1:]
+    hunks=diff_hunks(old,new)
+    assert len(hunks)==1
+    assert hunks[0]['change']=='added' and hunks[0]['new_pages']==[2,2] and hunks[0]['added']==['Paragraph X: newly inserted page.']
+    changed=diff_hunks(old,old[:2]+['Paragraph 3: amended rule text.']+old[3:])
+    assert len(changed)==1 and changed[0]['change']=='modified' and changed[0]['old_pages']==changed[0]['new_pages']==[3,3]
+    # Whitespace-only differences are not changes.
+    assert diff_hunks(['A  rule\n   text  '],['A rule\ntext'])==[]
+
+
+def test_version_order_uses_dates_then_upload_time():
+    from backend.app.compare import order_versions
+    def doc(i,uploaded,effective=None,published=None):
+        return {'id':i,'uploaded_at':uploaded,'metadata':{'effective_date':{'value':effective},'publication_date':{'value':published}}}
+    later=doc('b','2026-01-01',effective='2025-06-01'); earlier=doc('a','2026-02-01',effective='2024-04-01')
+    assert order_versions(later,earlier)==(earlier,later,True)
+    assert order_versions(earlier,later)==(earlier,later,False)
+    # Without dates on both, upload time decides.
+    assert order_versions(doc('x','2026-03-01',published='2020-01-01'),doc('y','2026-01-01'))[2] is True
+
+
+def test_compare_api_orders_versions_and_lists_changes(client):
+    old=upload(client,pdf('SYNTHETIC rule one.','SYNTHETIC rule two.'),version='v1',effective_date='2024-01-01').json()
+    new=upload(client,pdf('SYNTHETIC rule one.','SYNTHETIC inserted rule.','SYNTHETIC rule two.'),family_id=old['family_id'],version='v2',effective_date='2025-01-01').json()
+    result=client.get('/api/compare',params={'old':new['id'],'new':old['id']}).json()
+    assert result['reordered'] is True and result['old']['id']==old['id']
+    assert result['changes']==[{'change':'added','old_pages':[1,1],'new_pages':[2,2],'removed_lines':0,'added_lines':1}]
+    assert '+SYNTHETIC inserted rule.' in result['diff'] and 'evidence' not in result
+
+
+def test_ai_comparison_sends_aligned_changes_older_first(client,monkeypatch):
+    old=upload(client,pdf('SYNTHETIC rule one: verify identity.','SYNTHETIC rule two: review register.'),effective_date='2024-01-01').json()
+    new=upload(client,pdf('SYNTHETIC rule one: verify identity.','SYNTHETIC inserted rule: retain records.','SYNTHETIC rule two: review register.'),family_id=old['family_id'],effective_date='2025-01-01').json()
+    import backend.app.ai as module
+    captured=[]
+    original=httpx.AsyncClient
+    def respond(request):
+        body=json.loads(request.content); captured.append(body)
+        prompt=json.loads(body['messages'][1]['content'])
+        by_doc={}
+        for e in prompt['evidence']: by_doc.setdefault(e['document_id'],e)
+        payload={'items':[{'statement':'SYNTHETIC change','citations':[{'chunk_id':e['chunk_id'],'quote':e['text']} for e in by_doc.values()]}]}
+        return httpx.Response(200,json={'message':{'content':json.dumps(payload)}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+    response=client.post('/api/ai',json={'task':'comparison','question':'what changed','document_ids':[new['id'],old['id']]})
+    assert response.status_code==200,response.text
+    prompt=json.loads(captured[0]['messages'][1]['content'])
+    assert [d['id'] for d in prompt['documents']]==[old['id'],new['id']]
+    assert len(prompt['stored_page_differences'])==1 and prompt['stored_page_differences'][0]['new_pages']==[2,2]
+    # The changed page of the newer version is in the evidence.
+    assert any(e['document_id']==new['id'] and e['page']==2 for e in prompt['evidence'])
+    assert any('ordered by date' in n for n in response.json()['notes'])

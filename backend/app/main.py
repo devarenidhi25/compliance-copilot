@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .compare import diff_hunks, order_versions, page_lines, stored_pages
 from .importer import fetch_pdf
 from .store import Store
 from .retrieval import Retrieval, RetrievalError
@@ -184,15 +185,20 @@ def create_app(db_path=None):
 
     @app.get('/api/compare')
     def compare(old: str, new: str, org=Depends(organization)):
-        a,b = store.get(old,org),store.get(new,org)
+        a, b = store.get_metadata(old, org), store.get_metadata(new, org)
         if old == new or a['family_id'] != b['family_id']:
             raise ValueError('Select two distinct stored versions from the same family')
-        left,right = store.chunks(old,org),store.chunks(new,org)
-        # Page text avoids duplicate overlap in chunk reconstruction.
-        with store.engine.connect() as conn:
-            from sqlalchemy import text
-            texts = [[r[0] for r in conn.execute(text('SELECT content FROM pages WHERE document_id=:id ORDER BY number'),{'id':i})] for i in (old,new)]
-        return {'old':store.describe(a),'new':store.describe(b),'diff':'\n'.join(difflib.unified_diff('\n'.join(texts[0]).splitlines(),'\n'.join(texts[1]).splitlines(),fromfile=old,tofile=new,lineterm='')), 'evidence':{'old':left,'new':right}, 'note':'Text comparison only; this is not an AI regulatory interpretation.'}
+        older, newer, swapped = order_versions(a, b)
+        old_pages, new_pages = stored_pages(store, older['id']), stored_pages(store, newer['id'])
+        hunks = diff_hunks(old_pages, new_pages)
+        diff = '\n'.join(difflib.unified_diff([line for _, line in page_lines(old_pages)], [line for _, line in page_lines(new_pages)],
+                                              fromfile=older['id'], tofile=newer['id'], lineterm=''))
+        note = 'Text comparison only; this is not an AI regulatory interpretation.'
+        if swapped:
+            note += ' Versions were ordered by date: the earlier version is shown as old.'
+        return {'old':store.describe(older), 'new':store.describe(newer), 'reordered':swapped, 'diff':diff,
+                'changes':[{k:h[k] for k in ('change','old_pages','new_pages')} | {'removed_lines':len(h['removed']), 'added_lines':len(h['added'])} for h in hunks],
+                'note':note}
 
     @app.get('/api/health')
     async def health(org=Depends(organization)):
