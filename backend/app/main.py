@@ -2,7 +2,8 @@ import difflib
 import hmac
 import json
 import os
-from datetime import date
+import threading
+from datetime import date, datetime, timezone
 from typing import Literal, NamedTuple
 
 import httpx
@@ -12,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .compare import diff_hunks, order_versions, page_lines, stored_pages
 from .importer import fetch_pdf
+from .index_cli import synchronize
+from .paths import FRONTEND_INDEX, corpus_path
 from .store import Store
 from .retrieval import Retrieval, RetrievalError
 from starlette.concurrency import run_in_threadpool
@@ -70,6 +73,38 @@ class CitationRequest(BaseModel):
     quote: str
 
 
+class IndexJob:
+    """Runs index synchronization inside the server process, one job at a time.
+
+    Chroma's persistent store is not safe to write from a second process while
+    the server reads it, so administrators sync through the server instead.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.state = {'state':'idle'}
+
+    def start(self, retrieval, rebuild):
+        with self.lock:
+            if self.state['state'] == 'running':
+                raise HTTPException(409, 'An index job is already running')
+            self.state = {'state':'running', 'rebuild':rebuild, 'started_at':datetime.now(timezone.utc).isoformat()}
+        threading.Thread(target=self._run, args=(retrieval, rebuild), daemon=True).start()
+        return self.snapshot()
+
+    def _run(self, retrieval, rebuild):
+        try:
+            outcome = {'state':'complete', 'result':synchronize(retrieval, rebuild=rebuild)}
+        except Exception as exc:  # Reported to the administrator; the active index is preserved.
+            outcome = {'state':'failed', 'error':str(exc)}
+        with self.lock:
+            self.state = {**self.state, **outcome, 'finished_at':datetime.now(timezone.utc).isoformat()}
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.state)
+
+
 class Principal(NamedTuple):
     org: str
     is_admin: bool
@@ -91,9 +126,10 @@ def token_config():
 
 def create_app(db_path=None):
     app = FastAPI(title='Compliance Copilot document pipeline')
-    store = Store(db_path or os.getenv('COPILOT_DB','data/corpus.sqlite3'))
+    store = Store(db_path or corpus_path())
     app.state.store = store
     app.state.retrieval = Retrieval(store)
+    app.state.index_job = IndexJob()
 
     token_config()  # Fail at startup, not per request, on malformed token JSON.
 
@@ -140,7 +176,7 @@ def create_app(db_path=None):
 
     @app.get('/', include_in_schema=False)
     def home():
-        return FileResponse('frontend/index.html')
+        return FileResponse(FRONTEND_INDEX)
 
     @app.get('/api/documents')
     def documents(org=Depends(organization)):
@@ -200,6 +236,14 @@ def create_app(db_path=None):
                 'changes':[{k:h[k] for k in ('change','old_pages','new_pages')} | {'removed_lines':len(h['removed']), 'added_lines':len(h['added'])} for h in hunks],
                 'note':note}
 
+    @app.post('/api/admin/index/sync', status_code=202)
+    def start_index_job(rebuild: bool = False, user: Principal = Depends(administrator)):
+        return app.state.index_job.start(app.state.retrieval, rebuild)
+
+    @app.get('/api/admin/index/sync')
+    def index_job_status(user: Principal = Depends(administrator)):
+        return app.state.index_job.snapshot()
+
     @app.get('/api/health')
     async def health(org=Depends(organization)):
         retrieval_status = await run_in_threadpool(app.state.retrieval.status, org)
@@ -224,4 +268,11 @@ def create_app(db_path=None):
     return app
 
 
-app = create_app()
+def __getattr__(name):
+    # Created on first access (uvicorn backend.app.main:app), not at import, so
+    # importing this module (tests, tooling) never creates data/ or a database.
+    if name == 'app':
+        global app
+        app = create_app()
+        return app
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

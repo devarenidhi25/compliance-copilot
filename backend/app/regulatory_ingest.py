@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy import text
 
 from .importer import HOSTS, official_url
+from .paths import DEFAULT_INGESTION_REPORT, DEFAULT_REGISTRY, corpus_path
 from .store import Store
 
 MAX_LISTING_PAGES = 5
@@ -307,15 +308,15 @@ def run_ingestion(store, registry_path, *, max_listing_pages=2, max_documents=10
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--registry', default='datasets/official_sources.json')
+    parser.add_argument('--registry', default=str(DEFAULT_REGISTRY))
     parser.add_argument('--max-listing-pages', type=int, default=2)
     parser.add_argument('--max-documents', type=int, default=10)
     parser.add_argument('--request-delay', type=float, default=0.25)
-    parser.add_argument('--report', default='data/ingestion-report.json')
+    parser.add_argument('--report', default=str(DEFAULT_INGESTION_REPORT))
     args = parser.parse_args()
     if not 0 <= args.request_delay <= 10:
         parser.error('--request-delay must be between 0 and 10 seconds')
-    store = Store(__import__('os').getenv('COPILOT_DB','data/corpus.sqlite3'))
+    store = Store(corpus_path())
     report = run_ingestion(store, args.registry, max_listing_pages=args.max_listing_pages,
                            max_documents=args.max_documents, request_delay=args.request_delay)
     report_path = Path(args.report)

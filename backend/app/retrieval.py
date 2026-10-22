@@ -8,6 +8,8 @@ from pathlib import Path
 
 from rank_bm25 import BM25Okapi
 
+from .paths import chroma_path, model_path
+
 
 class RetrievalError(RuntimeError):
     pass
@@ -35,7 +37,7 @@ def inventory(chunks):
 
 class LocalEmbedder:
     def __init__(self):
-        self.path = Path(os.getenv('EMBEDDING_MODEL_PATH', 'data/models/bge-m3'))
+        self.path = model_path()
         self.model = None
         self.loaded_identity = None
         self.lock = threading.RLock()
@@ -76,8 +78,10 @@ class LocalEmbedder:
 class Retrieval:
     def __init__(self, store, path=None, embedder=None):
         self.store = store
-        self.path = Path(path or os.getenv('CHROMA_PATH', 'data/chroma'))
+        self.path = Path(path) if path else chroma_path()
         self.embedder = embedder or LocalEmbedder()
+        self._client = None
+        self._client_lock = threading.Lock()
 
     def config(self):
         return {'corpus':str(Path(self.store.engine.url.database).resolve()), 'embedding':self.embedder.identity(), 'normalized':True, 'distance':'cosine', 'preprocessing':'exact-chunk-v1'}
@@ -93,11 +97,18 @@ class Retrieval:
         except (ValueError, OSError) as exc:
             raise RetrievalError('Vector index manifest unreadable; inspect status and rebuild') from exc
 
+    def client(self):
+        """One persistent Chroma client per Retrieval (Chroma expects one client per process)."""
+        with self._client_lock:
+            if self._client is None:
+                import chromadb
+                from chromadb.config import Settings
+                self._client = chromadb.PersistentClient(path=str(self.path), settings=Settings(anonymized_telemetry=False))
+            return self._client
+
     def collection(self, name, create=False):
         try:
-            import chromadb
-            from chromadb.config import Settings
-            client = chromadb.PersistentClient(path=str(self.path), settings=Settings(anonymized_telemetry=False))
+            client = self.client()
             if create:
                 return client.get_or_create_collection(name, metadata={'hnsw:space':'cosine'}, embedding_function=None)
             return client.get_collection(name, embedding_function=None)

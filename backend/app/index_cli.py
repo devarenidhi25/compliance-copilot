@@ -11,6 +11,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from .retrieval import Retrieval, RetrievalError, inventory
+from .paths import corpus_path, model_path
 from .store import Store
 
 
@@ -93,7 +94,7 @@ def synchronize(retrieval, rebuild=False):
 def download_model():
     from huggingface_hub import snapshot_download
     model = os.getenv('EMBEDDING_MODEL','BAAI/bge-m3')
-    target = Path(os.getenv('EMBEDDING_MODEL_PATH','data/models/bge-m3'))
+    target = model_path()
     target.mkdir(parents=True,exist_ok=True)
     from huggingface_hub import model_info
     revision = model_info(model).sha
@@ -113,7 +114,7 @@ def main():
         if args.command=='download-model':
             result = download_model()
         else:
-            retrieval = Retrieval(Store(os.getenv('COPILOT_DB','data/corpus.sqlite3')))
+            retrieval = Retrieval(Store(corpus_path()))
             if args.command=='status':
                 result = {'manifest':retrieval.manifest(),'configured':retrieval.config()}
             else:

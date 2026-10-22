@@ -13,4 +13,6 @@ transformers==4.56.2
 huggingface-hub==0.34.4
 numpy==2.2.6
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.8.0+cpu
+# CPU-only wheels on Windows/Linux (from the extra index above); macOS wheels come from PyPI.
+torch==2.8.0+cpu ; sys_platform != "darwin"
+torch==2.8.0 ; sys_platform == "darwin"

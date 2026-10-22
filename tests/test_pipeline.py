@@ -553,3 +553,43 @@ def test_ai_comparison_sends_aligned_changes_older_first(client,monkeypatch):
     # The changed page of the newer version is in the evidence.
     assert any(e['document_id']==new['id'] and e['page']==2 for e in prompt['evidence'])
     assert any('ordered by date' in n for n in response.json()['notes'])
+
+
+def test_importing_main_does_not_create_app_or_data(tmp_path,monkeypatch):
+    import importlib, sys
+    monkeypatch.chdir(tmp_path)
+    sys.modules.pop('backend.app.main',None)
+    module=importlib.import_module('backend.app.main')
+    assert 'app' not in vars(module)
+    assert not (tmp_path/'data').exists()
+
+
+def test_defaults_resolve_from_repository_root(monkeypatch):
+    from backend.app import paths
+    monkeypatch.delenv('COPILOT_DB',raising=False)
+    assert paths.corpus_path()==paths.REPO_ROOT/'data'/'corpus.sqlite3'
+    assert paths.FRONTEND_INDEX.exists()
+    monkeypatch.setenv('COPILOT_DB','custom.sqlite3')
+    assert str(paths.corpus_path())=='custom.sqlite3'
+
+
+def test_frontend_served_from_any_working_directory(client,tmp_path,monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert client.get('/').status_code==200
+
+
+def test_admin_index_sync_runs_in_server(client):
+    store=client.app.state.store
+    doc=store.ingest(pdf('SYNTHETIC unindexed identity rule.'),Metadata(title='SYNTHETIC pending',kind='regulatory',regulator='RBI'),'alpha')
+    assert client.get('/api/retrieval/status').json()['state']=='unavailable'  # no index built yet
+    assert client.post('/api/admin/index/sync').status_code==403
+    started=client.post('/api/admin/index/sync',headers=ADMIN)
+    assert started.status_code==202
+    import time
+    for _ in range(100):
+        job=client.get('/api/admin/index/sync',headers=ADMIN).json()
+        if job['state']!='running': break
+        time.sleep(0.05)
+    assert job['state']=='complete',job
+    assert client.get('/api/retrieval/status').json()['state']=='ready'
+    assert client.post('/api/retrieval/search',json={'query':'identity','mode':'semantic','filters':{'document_ids':[doc['id']]}}).status_code==200
