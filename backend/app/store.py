@@ -23,6 +23,53 @@ SCHEMA = [
     content TEXT NOT NULL, section TEXT)''',
 ]
 
+MIN_QUOTE_CHARS = 12
+# PDF text and model output disagree on typographic variants; compare them as equal.
+_EQUIVALENT = str.maketrans({'‘':"'", '’':"'", '‚':"'", '‛':"'", '′':"'",
+                             '“':'"', '”':'"', '„':'"', '″':'"',
+                             '‐':'-', '‑':'-', '‒':'-', '–':'-', '—':'-', '−':'-'})
+
+
+def _normalized(value):
+    """Collapse whitespace runs to one space; return text and a map to original indices."""
+    chars, positions, pending_space = [], [], False
+    for index, char in enumerate(value):
+        if char.isspace():
+            pending_space = bool(chars)
+            continue
+        if pending_space:
+            chars.append(' ')
+            positions.append(index - 1)
+            pending_space = False
+        chars.append(char.translate(_EQUIVALENT))
+        positions.append(index)
+    return ''.join(chars), positions
+
+
+def collapse_whitespace(value):
+    return _normalized(value)[0]
+
+
+def locate_quote(content, quote):
+    """Find quote in content ignoring whitespace/typographic differences.
+
+    Returns the exact original substring of content, so stored citations remain
+    verbatim source text. Very short fragments are rejected unless they are the
+    whole chunk, because a single common word is not meaningful evidence.
+    """
+    if not isinstance(quote, str):
+        raise ValueError('Quote must be text')
+    needle = _normalized(quote)[0]
+    haystack, positions = _normalized(content)
+    if not needle:
+        raise ValueError('Quote must be a nonempty excerpt from the stored chunk')
+    if len(needle) < MIN_QUOTE_CHARS and needle != haystack:
+        raise ValueError(f'Quote must be at least {MIN_QUOTE_CHARS} characters of source text')
+    start = haystack.find(needle)
+    if start < 0:
+        raise ValueError('Quote must be an excerpt from the stored chunk (whitespace differences are tolerated)')
+    return content[positions[start]:positions[start + len(needle) - 1] + 1]
+
 
 class Store:
     def __init__(self, path, *, allow_synthetic=False):
@@ -145,8 +192,8 @@ class Store:
         if not row:
             raise LookupError('Citation not found')
         doc = self.get_metadata(row['document_id'], organization)
-        if not quote.strip() or quote not in row['content']:
-            raise ValueError('Quote must be an exact nonempty excerpt from the stored chunk')
+        # Returned quote is the exact original span, not the model's spacing.
+        quote = locate_quote(row['content'], quote)
         metadata = json.loads(doc['metadata'])
         result = {'document_id':doc['id'], 'chunk_id':chunk_id, 'page':row['page'], 'quote':quote, 'source_url':metadata['source_url'], 'pdf_reference':f"/api/documents/{doc['id']}/pdf#page={row['page']}", 'source_reference':f"/api/documents/{doc['id']}/pdf#page={row['page']}", 'content_hash':doc['content_hash']}
         if row.get('section'):

@@ -38,6 +38,12 @@ ollama serve
 ```
 
 `OLLAMA_URL` defaults to `http://localhost:11434`; `OLLAMA_MODEL` to `qwen3:8b`.
+`OLLAMA_NUM_CTX` (default `16384`) sets the model context window sent with every
+request; Ollama's own default is much smaller and silently truncates long prompts.
+`OLLAMA_TIMEOUT` (default `300` seconds) bounds each generation; raise it on slow CPUs.
+`OLLAMA_PROMPT_CHARS` optionally overrides the prompt budget (default derived from
+`OLLAMA_NUM_CTX`). When evidence exceeds the budget, the lowest-ranked excerpts are
+dropped first (one excerpt per document is always kept) and the response says so.
 No model is downloaded by the backend. Generate from selected document UUIDs in
 the interface; comparisons need two versions from one family, gaps need both
 regulatory and organization-internal evidence. Ingested documents remain usable
@@ -120,7 +126,14 @@ separately; comparison also supplies hints from at most ten changed physical pag
 These bounded excerpts do not establish absence of a provision from a complete policy.
 
 AI responses preserve `statement` and add `interpretation`, exact-quotation
-`source_facts`, and gap `assessment`. The supported labels are `APPEARS_ADDRESSED`,
+`source_facts`, and gap `assessment`. Quotations are matched ignoring whitespace and
+typographic quote/dash differences, and the stored citation is always the exact original
+source span. Each model item is validated independently: items with an unsupported
+quotation, an unprovided chunk ID or an invalid label are dropped and listed in
+`rejected_items` with a reason; the request fails only when no item survives.
+Gap items must cite at least one regulatory and one internal excerpt; comparison items
+must cite both versions. Q&A uses regulatory documents only and notes any ignored
+internal selections. The supported labels are `APPEARS_ADDRESSED`,
 `PARTIALLY_ADDRESSED`, `POTENTIAL_GAP`, `POSSIBLE_CONFLICT`, `INSUFFICIENT_EVIDENCE`.
 Labels are model assessments requiring review, not legal determinations. Every item
 remains `pending_human_review`; approvals are not yet persisted.
