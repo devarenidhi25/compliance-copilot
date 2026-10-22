@@ -107,10 +107,18 @@ def test_pending_mismatch_and_atomic_rebuild(retrieval):
     add(retrieval)
     synchronize(retrieval)
     old=retrieval.manifest()
-    add(retrieval,'SYNTHETIC second review document')
+    pending=add(retrieval,'SYNTHETIC second review document')
     assert retrieval.status('alpha')['state']=='pending'
-    with pytest.raises(RetrievalError,match='not fully indexed'): retrieval.search('review','alpha')
+    # Unfiltered search keeps working: the pending document is keyword-searched and reported.
+    result=retrieval.search('review','alpha')
+    assert result['unindexed_documents']==[pending['id']] and 'not yet indexed' in result['message']
+    assert pending['id'] in {c['document_id'] for c in result['results']}
+    semantic=retrieval.search('review','alpha',mode='semantic')
+    assert pending['id'] not in {c['document_id'] for c in semantic['results']} and semantic['unindexed_documents']==[pending['id']]
+    # Explicitly selecting the pending document still fails closed.
+    with pytest.raises(RetrievalError,match='not fully indexed'): retrieval.search('review','alpha',{'document_ids':[pending['id']]})
     synchronize(retrieval)
+    assert retrieval.search('review','alpha')['unindexed_documents']==[]
     class Changed(TestEmbedder):
         def identity(self): return {'model':'synthetic-test-only','revision':'2'}
     retrieval.embedder=Changed()

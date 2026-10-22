@@ -173,7 +173,7 @@ class Retrieval:
         docs, chunks = self.candidates(org, filters)
         if not chunks:
             return {'mode':mode, 'results':[], 'message':'No accessible matching evidence. Upload/import documents or adjust filters.'}
-        lexical, semantic = [], []
+        lexical, semantic, unindexed, message = [], [], [], None
         if mode in ('bm25','hybrid'):
             corpus = [tokens(c['content']) for c in chunks]
             query = tokens(question)
@@ -181,19 +181,47 @@ class Retrieval:
                 scores = BM25Okapi(corpus).get_scores(query)
                 lexical = [chunks[i]['id'] for i in sorted(range(len(chunks)), key=lambda i:(-scores[i],chunks[i]['id'])) if set(query) & set(corpus[i])][:20]
         if mode in ('semantic','hybrid'):
-            manifest = self.ready(docs, chunks)
-            vector = self.embedder.encode([question])
-            if manifest['config'] != self.config():
-                raise RetrievalError('Embedding configuration changed during search; retry after rebuilding the index')
-            if not vector or len(vector[0]) != manifest.get('dimensions'):
-                raise RetrievalError('Query vector dimensions do not match the index; rebuild required')
-            collection = self.validate_vectors(manifest, chunks)
-            try:
-                result = collection.query(query_embeddings=vector, n_results=min(20,len(chunks)), where={'document_id':{'$in':[d['id'] for d in docs]}}, include=['distances'])
-                semantic = [identifier for _,identifier in sorted(zip(result['distances'][0], result['ids'][0]), key=lambda pair:(pair[0],pair[1]))]
-            except Exception as exc:
-                raise RetrievalError('Semantic query failed; inspect index status and rebuild if necessary') from exc
+            if (filters or {}).get('document_ids'):
+                # Explicitly selected versions (as AI generation uses) must all be
+                # indexed; answering from a silent subset would mislead the reviewer.
+                manifest = self.ready(docs, chunks)
+                indexed_docs, indexed_chunks = docs, chunks
+            else:
+                manifest, indexed_docs, unindexed = self.indexed_subset(docs, chunks)
+                indexed_ids = {d['id'] for d in indexed_docs}
+                indexed_chunks = [c for c in chunks if c['document_id'] in indexed_ids]
+                if unindexed:
+                    message = (f'{len(unindexed)} document(s) are not yet indexed and were searched by keyword only'
+                               if mode == 'hybrid' else f'{len(unindexed)} document(s) are not yet indexed and were not searched')
+                    message += '. An administrator can run index sync to include them.'
+            if indexed_chunks:
+                semantic = self.semantic_ranking(question, manifest, indexed_docs, indexed_chunks)
         allowed = {c['id']:c for c in chunks}
         semantic = [i for i in semantic if i in allowed]
         ranking = rrf(lexical, semantic) if mode=='hybrid' else rrf(lexical if mode=='bm25' else semantic)
-        return {'mode':mode, 'results':[{**allowed[i], 'score':score} for i,score in ranking[:limit]], 'message':None}
+        return {'mode':mode, 'results':[{**allowed[i], 'score':score} for i,score in ranking[:limit]], 'message':message,
+                'unindexed_documents':unindexed}
+
+    def indexed_subset(self, docs, chunks):
+        """Split documents into those with a current index entry and those without."""
+        manifest = self.manifest()
+        if manifest['config'] != self.config():
+            raise RetrievalError('Embedding/index configuration changed. Run index_cli rebuild; existing vectors cannot be mixed.')
+        indexed, unindexed = [], []
+        for doc in docs:
+            expected = inventory([c for c in chunks if c['document_id'] == doc['id']])
+            (indexed if manifest['documents'].get(doc['id']) == expected else unindexed).append(doc)
+        return manifest, indexed, [d['id'] for d in unindexed]
+
+    def semantic_ranking(self, question, manifest, docs, chunks):
+        vector = self.embedder.encode([question])
+        if manifest['config'] != self.config():
+            raise RetrievalError('Embedding configuration changed during search; retry after rebuilding the index')
+        if not vector or len(vector[0]) != manifest.get('dimensions'):
+            raise RetrievalError('Query vector dimensions do not match the index; rebuild required')
+        collection = self.validate_vectors(manifest, chunks)
+        try:
+            result = collection.query(query_embeddings=vector, n_results=min(20,len(chunks)), where={'document_id':{'$in':[d['id'] for d in docs]}}, include=['distances'])
+            return [identifier for _,identifier in sorted(zip(result['distances'][0], result['ids'][0]), key=lambda pair:(pair[0],pair[1]))]
+        except Exception as exc:
+            raise RetrievalError('Semantic query failed; inspect index status and rebuild if necessary') from exc
