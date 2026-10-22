@@ -207,3 +207,42 @@ def test_model_change_during_search_or_rebuild_fails_closed(retrieval):
     retrieval.embedder=Changing()
     with pytest.raises(RetrievalError,match='during indexing'): synchronize(retrieval,rebuild=True)
     assert retrieval.manifest()==original
+
+
+def test_retrieval_evaluation_reports_hits_and_unavailable_modes(retrieval,tmp_path):
+    import hashlib
+    from backend.app.eval_cli import evaluate, load_spec, summary
+    data=pdf('SYNTHETIC identity requirement','SYNTHETIC review register')
+    doc=retrieval.store.ingest(data,Metadata(title='SYNTHETIC eval',kind='regulatory',regulator='RBI'),'alpha')
+    path=tmp_path/'questions.json'
+    path.write_text(json.dumps({'document':{'content_hash':hashlib.sha256(data).hexdigest()},'k':1,'questions':[
+        {'id':'a','question':'review register','expected_pages':[2]},
+        {'id':'b','question':'identity requirement','expected_pages':[2]}]}))
+    spec=load_spec(path)
+    before=evaluate(retrieval,spec,('bm25','semantic'))
+    assert before['document_id']==doc['id']
+    assert before['modes']['bm25']['hit@1']==0.5 and before['modes']['bm25']['mrr@1']==0.5
+    assert before['modes']['semantic']['available'] is False
+    synchronize(retrieval)
+    after=evaluate(retrieval,spec,('semantic',))
+    assert after['modes']['semantic']['available'] is True
+    assert 'bm25' in summary(before) and 'unavailable' in summary(before)
+
+
+def test_evaluation_requires_known_document(retrieval,tmp_path):
+    from backend.app.eval_cli import evaluate, load_spec
+    path=tmp_path/'q.json'
+    path.write_text(json.dumps({'document':{'content_hash':'0'*64},'questions':[{'question':'x','expected_pages':[1]}]}))
+    with pytest.raises(LookupError,match='upload it first'): evaluate(retrieval,load_spec(path))
+    path.write_text(json.dumps({'document':{},'questions':[{'question':'x','expected_pages':[1]}]}))
+    with pytest.raises(ValueError,match='content_hash'): load_spec(path)
+
+
+def test_bundled_evaluation_file_matches_bundled_pdf():
+    import hashlib
+    from pathlib import Path
+    from backend.app.eval_cli import load_spec
+    spec=load_spec(Path('datasets/eval/lodr_master_circular.json'))
+    data=Path('datasets/MASTER CIRCULAR_2026_1769776024792.pdf').read_bytes()
+    assert spec['document']['content_hash']==hashlib.sha256(data).hexdigest()
+    assert all(1<=p<=291 for q in spec['questions'] for p in q['expected_pages'])

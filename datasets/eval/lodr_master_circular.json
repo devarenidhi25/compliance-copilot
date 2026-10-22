@@ -1,0 +1,117 @@
+{
+  "description": "Retrieval check for the SEBI LODR Master Circular (last updated January 30, 2026). Expected pages are the physical PDF pages of the section that answers each question (from the circular's table of contents, checked against page text), plus annexure pages that state the answer directly (Annexure 18A for event timelines, the half-yearly RPT format on page 278).",
+  "document": {
+    "title": "SEBI LODR Master Circular (datasets/MASTER CIRCULAR_2026_1769776024792.pdf)",
+    "content_hash": "fa3b4360d2a86be611ecc44350baf0cbcb5eec97286dd1a6e553f94efdf1b99b"
+  },
+  "k": 6,
+  "questions": [
+    {
+      "id": "material-event-timeline",
+      "question": "How quickly must a listed company tell the stock exchange about a decision taken at a board meeting?",
+      "expected_pages": [
+        28,
+        29,
+        236
+      ]
+    },
+    {
+      "id": "market-rumours",
+      "question": "Which listed companies have to confirm or deny rumours reported in the media, and how?",
+      "expected_pages": [
+        30
+      ]
+    },
+    {
+      "id": "loan-defaults",
+      "question": "What must a listed entity disclose when it defaults on repaying a bank loan?",
+      "expected_pages": [
+        31,
+        32,
+        33
+      ]
+    },
+    {
+      "id": "auditor-resignation",
+      "question": "What happens when the statutory auditor of a listed company resigns?",
+      "expected_pages": [
+        35,
+        36,
+        37
+      ]
+    },
+    {
+      "id": "minimum-public-shareholding",
+      "question": "What methods can a promoter use to bring public shareholding up to the minimum level?",
+      "expected_pages": [
+        38,
+        39,
+        40
+      ]
+    },
+    {
+      "id": "brsr",
+      "question": "Which companies must file a business responsibility and sustainability report?",
+      "expected_pages": [
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "id": "secretarial-compliance",
+      "question": "When is the annual secretarial compliance report due and who signs it?",
+      "expected_pages": [
+        23
+      ]
+    },
+    {
+      "id": "issue-proceeds-deviation",
+      "question": "How should a listed entity report if money raised in a rights issue is used differently from what was stated?",
+      "expected_pages": [
+        22
+      ]
+    },
+    {
+      "id": "related-party-transactions",
+      "question": "How often must related party transactions be disclosed to the exchanges?",
+      "expected_pages": [
+        19,
+        20,
+        21,
+        278
+      ]
+    },
+    {
+      "id": "e-voting",
+      "question": "Do shareholders get remote electronic voting on resolutions?",
+      "expected_pages": [
+        42,
+        43
+      ]
+    },
+    {
+      "id": "bank-divergence",
+      "question": "What must a listed bank disclose about divergence in asset classification and provisioning found by RBI?",
+      "expected_pages": [
+        34
+      ]
+    },
+    {
+      "id": "trading-suspension",
+      "question": "What penalties and suspension of trading apply when a listed entity does not comply with LODR provisions?",
+      "expected_pages": [
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64
+      ]
+    }
+  ]
+}

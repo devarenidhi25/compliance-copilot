@@ -167,3 +167,29 @@ No automatic regulatory refresh, verified-metadata review UI, schema migration
 framework, OCR, or structured table extraction is included.
 Add migrations before evolving persistent schemas. Embedding identity is pinned to the index; rebuild when it changes. Human approval, reports and audit
 history will need persistent records instead of treating generated text as approved.
+
+## Retrieval evaluation
+
+`datasets/eval/lodr_master_circular.json` holds 12 plain-language questions about
+the bundled SEBI LODR Master Circular, each with the physical PDF pages of the
+section that answers it (taken from the circular's table of contents and checked
+against the page text, plus annexure pages that state the answer directly). The
+document is matched by SHA-256 content hash, so any upload of the same PDF works.
+
+After uploading the circular and syncing the index:
+
+```sh
+.venv/bin/python -m backend.app.eval_cli            # Windows: .venv/Scripts/python
+.venv/bin/python -m backend.app.eval_cli --modes bm25 --report data/eval-report.json
+```
+
+It prints hit@6 (share of questions with a correct page in the top six results)
+and MRR@6 for each of BM25, semantic and hybrid search. Measured BM25 baseline on
+this file: hit@6 0.833, MRR@6 0.750 (misses: market-rumour verification and loan
+defaults, where the questions share few words with the source text). Semantic and
+hybrid figures require the downloaded BGE-M3 model; record them on your machine.
+
+The circular covers listed-company obligations, not KYC/AML. To evaluate the KYC
+focus of the project, upload the official RBI KYC Master Direction PDF (download
+it manually from rbi.org.in), then copy the question file, replace
+`content_hash` with that PDF's SHA-256, and write KYC questions with their pages.
