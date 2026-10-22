@@ -593,3 +593,28 @@ def test_admin_index_sync_runs_in_server(client):
     assert job['state']=='complete',job
     assert client.get('/api/retrieval/status').json()['state']=='ready'
     assert client.post('/api/retrieval/search',json={'query':'identity','mode':'semantic','filters':{'document_ids':[doc['id']]}}).status_code==200
+
+
+def test_stored_html_is_served_sandboxed(client):
+    store=client.app.state.store
+    meta=Metadata(title='SYNTHETIC html source',kind='regulatory',regulator='RBI')
+    doc=store.ingest_html(b'<h1>Rule</h1><script>alert(1)</script><p>Text.</p>',meta,'alpha',[('Rule','SYNTHETIC html rule text.')],verified_source='https://www.rbi.org.in/a.html')
+    response=client.get(f"/api/documents/{doc['id']}/pdf")
+    assert response.headers['content-type'].startswith('text/html')
+    assert response.headers['content-security-policy'].startswith('sandbox')
+    assert response.headers['x-content-type-options']=='nosniff'
+    pdf_doc=upload(client).json()
+    pdf_response=client.get(f"/api/documents/{pdf_doc['id']}/pdf")
+    assert 'content-security-policy' not in pdf_response.headers and pdf_response.headers['x-content-type-options']=='nosniff'
+
+
+def test_database_indexes_and_foreign_keys(tmp_path):
+    from sqlalchemy import text as sql
+    store=Store(tmp_path/'db.sqlite')
+    with store.engine.connect() as conn:
+        indexes={row[1] for row in conn.execute(sql("SELECT type,name FROM sqlite_master WHERE type='index'"))}
+        assert {'idx_chunks_document','idx_documents_organization'} <= indexes
+        assert conn.execute(sql('PRAGMA foreign_keys')).scalar()==1
+    with pytest.raises(Exception):
+        with store.engine.begin() as conn:
+            conn.execute(sql("INSERT INTO chunks (id,document_id,page,start_offset,end_offset,content) VALUES ('c','missing-doc',1,0,1,'x')"))

@@ -213,7 +213,11 @@ def create_app(db_path=None):
         is_html = document['metadata'] and json.loads(document['metadata']).get('original_format',{}).get('value') == 'html'
         media_type = 'text/html; charset=utf-8' if is_html else 'application/pdf'
         filename = 'source.html' if is_html else 'source.pdf'
-        return Response(document['pdf'], media_type=media_type, headers={'Content-Disposition':f'inline; filename="{filename}"'})
+        headers = {'Content-Disposition':f'inline; filename="{filename}"', 'X-Content-Type-Options':'nosniff'}
+        if is_html:
+            # Stored official HTML may contain scripts; never run them with this app's origin.
+            headers['Content-Security-Policy'] = 'sandbox; default-src \'none\'; img-src data:; style-src \'unsafe-inline\''
+        return Response(document['pdf'], media_type=media_type, headers=headers)
 
     @app.post('/api/citations/validate')
     def citation(body: CitationRequest, org=Depends(organization)):

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pymupdf
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 
 SCHEMA = [
     '''CREATE TABLE IF NOT EXISTS documents (
@@ -21,7 +21,17 @@ SCHEMA = [
     id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id),
     page INTEGER NOT NULL, start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
     content TEXT NOT NULL, section TEXT)''',
+    'CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id, page, start_offset)',
+    'CREATE INDEX IF NOT EXISTS idx_documents_organization ON documents(organization)',
 ]
+
+
+
+def _enable_foreign_keys(dbapi_connection, _record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute('PRAGMA foreign_keys=ON')
+    cursor.close()
+
 
 MIN_QUOTE_CHARS = 12
 # PDF text and model output disagree on typographic variants; compare them as equal.
@@ -76,12 +86,15 @@ class Store:
         self.allow_synthetic = allow_synthetic
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f'sqlite:///{path}')
+        event.listen(self.engine, 'connect', _enable_foreign_keys)
         with self.engine.begin() as conn:
-            for statement in SCHEMA:
+            for statement in SCHEMA[:3]:
                 conn.execute(text(statement))
             columns = {row[1] for row in conn.execute(text('PRAGMA table_info(chunks)'))}
             if 'section' not in columns:
                 conn.execute(text('ALTER TABLE chunks ADD COLUMN section TEXT'))
+            for statement in SCHEMA[3:]:
+                conn.execute(text(statement))
 
     def list(self, organization):
         with self.engine.connect() as conn:
