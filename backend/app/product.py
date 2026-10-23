@@ -31,10 +31,11 @@ from sqlalchemy import text
 
 from .ai import generate
 from .compare import diff_hunks, order_versions, stored_pages
+from .focus import add_focus
 from .retrieval import RetrievalError
 
 ROLES = {'compliance_officer':'Compliance Officer', 'legal':'Legal', 'risk':'Risk', 'executive':'Executive'}
-STAGES = ('queued', 'retrieving', 'drafting', 'verifying', 'completed')
+STAGES = ('queued', 'retrieving', 'drafting', 'verifying', 'summarising', 'completed')
 MAX_JOBS_KEPT = 200
 MAX_CHANGES = 300
 MAX_LINES_PER_CHANGE = 60
@@ -175,6 +176,11 @@ class JobRunner:
             result = asyncio.run(generate(_TrackedStore(store, job), body, job['organization'], _TrackedRetrieval(retrieval, job)))
             if job['task'] == 'gap_analysis':
                 result = score_gap(result)
+            # Answer-first focus: optional, validated, and never fatal to the verified result.
+            job['stage'] = 'summarising'
+            focus_started = time.monotonic()
+            result = add_focus(result, job['question'])
+            result['focus_seconds'] = round(time.monotonic() - focus_started, 1)
             result['audit_id'] = job['audit_id']
             job['result'], job['state'], job['stage'] = result, 'completed', 'completed'
         except (ValueError, LookupError, RuntimeError) as exc:  # RetrievalError is a RuntimeError

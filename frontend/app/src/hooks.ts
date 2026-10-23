@@ -26,6 +26,15 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[] = []) {
   return { data, error, loading, reload };
 }
 
+/** Remember a started job for a page, so that page shows it when opened. */
+export function rememberJob(storageKey: string, id: string) {
+  try {
+    sessionStorage.setItem(`compliance-copilot-job-${storageKey}`, id);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /**
  * Track an AI job by id. The id is remembered per page in sessionStorage, so the
  * reviewer can leave the page during a slow generation and find the result on return.

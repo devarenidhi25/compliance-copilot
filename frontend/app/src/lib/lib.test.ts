@@ -61,3 +61,18 @@ describe('version families', () => {
     expect(joinableFamilies(families, 'regulatory', true).map((f) => f.id).sort()).toEqual(['mine', 'shared']);
   });
 });
+
+import { markPhrases } from './quote';
+
+describe('answer highlights', () => {
+  it('marks each phrase once, in order, without overlaps', () => {
+    expect(markPhrases('Within 30 minutes or 12 hours.', ['12 hours', '30 minutes', '30 min'])).toEqual([
+      { text: 'Within ', marked: false },
+      { text: '30 minutes', marked: true },
+      { text: ' or ', marked: false },
+      { text: '12 hours', marked: true },
+      { text: '.', marked: false },
+    ]);
+    expect(markPhrases('No match here', ['absent'])).toEqual([{ text: 'No match here', marked: false }]);
+  });
+});

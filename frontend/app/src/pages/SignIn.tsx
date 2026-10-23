@@ -36,28 +36,18 @@ export function SignIn() {
     <div className="signin">
       <div className="signin-inner">
         <section className="signin-intro">
-          <h1>Compliance Copilot</h1>
-          <p className="lede">
-            Answers from RBI and SEBI regulation. Every statement carries the exact words it rests on,
-            checked against the source page before you see it.
-          </p>
-          <figure className="sample" style={{ margin: 0 }} aria-label="Example of a verified statement">
-            <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
-              <span className="num" aria-hidden="true">1</span>
-              <div style={{ display: 'grid', gap: 8 }}>
-                <p className="statement">A board decision on a material event must reach the stock exchanges within 30 minutes of the meeting closing.</p>
-                <p className="quote"><span className="hl">thirty minutes from the closure of the meeting of the board of directors</span></p>
-                <figcaption className="meta">SEBI LODR Master Circular, Annexure 18A, page 236</figcaption>
-              </div>
-            </div>
+          <span className="brand"><span className="logo" aria-hidden="true" />Compliance Copilot</span>
+          <h1>Answers from RBI and SEBI regulation, on the record.</h1>
+          <p className="lede">Ask a question and see the answer first, with the exact words from the circular that back it up, checked against the source page before you see it.</p>
+          <figure className="signin-example" style={{ margin: 0 }} aria-label="Example answer">
+            <span className="q">How quickly must a listed company disclose a material event?</span>
+            <span className="a">Within <mark>30 minutes</mark> of a board decision, <mark>12 hours</mark> if it arises inside the company, <mark>24 hours</mark> if outside.</span>
+            <figcaption className="src">SEBI LODR Master Circular · Annexure 18A · page 236</figcaption>
           </figure>
         </section>
 
         <form className="signin-form" onSubmit={submit}>
-          <div>
-            <h2>Sign in</h2>
-            <p className="muted small-text" style={{ marginTop: 4 }}>Use the access code your administrator gave you.</p>
-          </div>
+          <h2>Sign in</h2>
           <label className="field">
             <span>Your name</span>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} autoComplete="name" />
@@ -74,7 +64,7 @@ export function SignIn() {
             ))}
           </fieldset>
           <label className="field">
-            <span>Access code</span>
+            <span>Access code from your administrator</span>
             <input className="input" type="password" value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="current-password" />
           </label>
           {error && <ErrorNote>{error}</ErrorNote>}

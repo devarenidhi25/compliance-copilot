@@ -36,6 +36,8 @@ export interface SourceTarget {
   section?: string | null;
   /** The finding number shown beside the highlight on the source page. */
   label?: number;
+  /** The words in the quote that answer the question, emphasised in the header. */
+  keyPhrase?: string;
 }
 
 interface SourceContextValue {

@@ -112,8 +112,8 @@ function PdfPage({ target, onPageCount }: { target: SourceTarget; onPageCount: (
         ))}
         {target.label != null && marks.length > 0 && (
           <span className="pdf-label" aria-hidden="true"
-            style={{ left: Math.max(2, Math.min(...marks.map((m) => m.left)) - 26), top: marks[0].top + marks[0].height / 2 - 10 }}>
-            {target.label}
+            style={{ left: Math.max(2, Math.min(...marks.map((m) => m.left)) - 30), top: marks[0].top + marks[0].height / 2 - 10 }}>
+            {String(target.label).padStart(2, '0')}
           </span>
         )}
       </div>
@@ -155,21 +155,22 @@ export function SourcePane() {
     <aside className="source-pane" aria-label="Source document">
       <div className="source-head">
         <div className="row">
-          <h2>{doc?.metadata.title.value ?? 'Source document'}</h2>
-          <button className="button quiet small" onClick={close}>Close</button>
-        </div>
-        <div className="row">
-          <span className="muted small-text">
-            {isHtml ? `Section: ${target.section ?? target.page}` : `Page ${target.page}${pages ? ` of ${pages}` : ''}`}
+          <span className="label">
+            [ Source · {isHtml ? `section ${target.section ?? target.page}` : `page ${target.page}${pages ? ` of ${pages}` : ''}`} ]
           </span>
-          {!isHtml && (
-            <span className="row" style={{ gap: 4 }}>
-              <button className="button small" disabled={target.page <= 1} onClick={() => go(target.page - 1)}>Previous page</button>
-              <button className="button small" disabled={!!pages && target.page >= pages} onClick={() => go(target.page + 1)}>Next page</button>
-            </span>
-          )}
+          <span className="nav-buttons">
+            {!isHtml && <button aria-label="Previous page" disabled={target.page <= 1} onClick={() => go(target.page - 1)}>&lt;</button>}
+            {!isHtml && <button aria-label="Next page" disabled={!!pages && target.page >= pages} onClick={() => go(target.page + 1)}>&gt;</button>}
+            <button className="close" onClick={close}>CLOSE</button>
+          </span>
         </div>
-        {target.quote && <p className="source-quote">{target.label != null && <strong>{target.label}. </strong>}<span className="hl">{target.quote}</span></p>}
+        <h2>{doc?.metadata.title.value ?? 'Source document'}</h2>
+        {target.quote && (
+          <p className="source-quote">
+            {target.label != null && <strong>{String(target.label).padStart(2, '0')} · </strong>}
+            “{markQuote(target.quote, target.keyPhrase ?? '').map((part, i) => (part.marked ? <mark key={i}>{part.text}</mark> : <span key={i}>{part.text}</span>))}”
+          </p>
+        )}
       </div>
       <div className="source-body">
         {isHtml ? <TextSource target={target} /> : <PdfPage key={target.documentId} target={target} onPageCount={setPages} />}

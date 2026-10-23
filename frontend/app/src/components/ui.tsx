@@ -36,7 +36,7 @@ export function VisibilityBadge({ doc }: { doc: Pick<LibraryDocument, 'visibilit
 
 export function IndexBadge({ doc }: { doc: Pick<LibraryDocument, 'indexed'> }) {
   return doc.indexed ? (
-    <span className="badge good"><span className="dot" />Ready for AI</span>
+    <span className="badge ok"><span className="dot" />Ready for AI</span>
   ) : (
     <span className="badge warn"><span className="dot" />Waiting to be indexed</span>
   );
@@ -45,8 +45,8 @@ export function IndexBadge({ doc }: { doc: Pick<LibraryDocument, 'indexed'> }) {
 const RISK: Record<string, { label: string; tone: string }> = {
   high: { label: 'High risk', tone: 'bad' },
   medium: { label: 'Medium risk', tone: 'warn' },
-  low: { label: 'Low risk', tone: 'good' },
-  review: { label: 'Needs review', tone: 'plain' },
+  low: { label: 'Low risk', tone: 'ok' },
+  review: { label: 'Needs review', tone: 'dashed' },
 };
 
 export function RiskBadge({ risk }: { risk?: string }) {

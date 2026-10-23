@@ -56,6 +56,15 @@ export interface Citation {
   quote: string;
   section?: string;
   source_url: Field;
+  /** The words in the quote that answer the question (checked to appear in the quote). */
+  key_phrase?: string;
+}
+
+export interface Focus {
+  answer: string | null;
+  highlights: string[];
+  labels: Record<string, string>;
+  note: string;
 }
 
 export interface ResultItem {
@@ -88,10 +97,12 @@ export interface AIResult {
   limitations: string;
   audit_id?: string;
   gap_summary?: GapSummary;
+  focus?: Focus | null;
+  focus_seconds?: number;
 }
 
 export type Task = 'qa' | 'comparison' | 'gap_analysis' | 'checklist';
-export type Stage = 'queued' | 'retrieving' | 'drafting' | 'verifying' | 'completed';
+export type Stage = 'queued' | 'retrieving' | 'drafting' | 'verifying' | 'summarising' | 'completed';
 
 export interface Job {
   id: string;

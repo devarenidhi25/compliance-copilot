@@ -222,3 +222,75 @@ def test_restart_marks_unfinished_audit_entries_interrupted(client, tmp_path):
     create_app(store.engine.url.database)  # a restart on the same database
     entry = client.get('/api/app/audit/AUD-TEST-1').json()
     assert entry['status'] == 'failed' and 'server restart' in entry['error']
+
+
+def focus_transport(monkeypatch, focus_reply):
+    """Mock both model calls: generation cites the first excerpt; the focus call returns focus_reply."""
+    import backend.app.ai as ai_module
+    import backend.app.focus as focus_module
+    monkeypatch.setenv('AI_FOCUS', 'true')
+    cite_first_sent(monkeypatch)
+    original = httpx.Client
+    seen = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        seen.append(json.loads(body['messages'][1]['content']))
+        reply = focus_reply(seen[-1]) if callable(focus_reply) else focus_reply
+        return httpx.Response(200, json={'message':{'content':json.dumps(reply)}})
+    monkeypatch.setattr(focus_module.httpx, 'Client', lambda **kw: original(transport=httpx.MockTransport(respond), **kw))
+    return seen
+
+
+def test_focus_adds_validated_answer_highlights_and_key_phrases(client, monkeypatch):
+    doc = upload(client, pdf('SYNTHETIC rule: disclose within thirty minutes of the board meeting.')).json()
+
+    def reply(prompt):
+        quote = prompt['statements'][0]['quotations'][0]['text']
+        assert prompt['question'] == 'how fast' and quote
+        return {'answer':'Disclose within 30 minutes of the board meeting.', 'highlights':['30 minutes', 'not in the answer'],
+                'items':[{'index':0, 'label':'30 minutes', 'key_phrases':['THIRTY   minutes']}, {'index':7, 'label':'bad index'}]}
+    seen = focus_transport(monkeypatch, reply)
+    job = wait(client, client.post('/api/app/jobs', json={'task':'qa', 'question':'how fast', 'document_ids':[doc['id']]}).json()['id'])
+    assert job['state'] == 'completed', job
+    focus = job['result']['focus']
+    assert focus['answer'] == 'Disclose within 30 minutes of the board meeting.'
+    assert focus['highlights'] == ['30 minutes'] and focus['labels'] == {'0':'30 minutes'}
+    citation = job['result']['items'][0]['citations'][0]
+    assert citation['key_phrase'] == 'thirty minutes' and citation['key_phrase'] in citation['quote']
+    assert len(seen) == 1 and 'focus_seconds' in job['result']
+    # The audit trail keeps the focused result.
+    assert client.get(f"/api/app/audit/{job['audit_id']}").json()['result']['focus']['answer'] == focus['answer']
+
+
+def test_focus_drops_phrases_not_in_the_quote(client, monkeypatch):
+    doc = upload(client).json()
+    focus_transport(monkeypatch, {'answer':'An answer.', 'highlights':[], 'items':[{'index':0, 'label':'x' * 80, 'key_phrases':['words the source never said']}]})
+    job = wait(client, client.post('/api/app/jobs', json={'task':'qa', 'question':'q', 'document_ids':[doc['id']]}).json()['id'])
+    focus = job['result']['focus']
+    assert focus['labels'] == {} and focus['key_phrases_kept'] == 0 and focus['key_phrases_offered'] == 1
+    assert 'key_phrase' not in job['result']['items'][0]['citations'][0]
+
+
+def test_focus_failure_keeps_the_verified_answer(client, monkeypatch):
+    doc = upload(client).json()
+    focus_transport(monkeypatch, 'not json at all')  # the reply content becomes a JSON string, not an object
+    job = wait(client, client.post('/api/app/jobs', json={'task':'qa', 'question':'q', 'document_ids':[doc['id']]}).json()['id'])
+    assert job['state'] == 'completed' and job['result']['focus'] is None
+    assert job['result']['items'] and any('short answer could not be prepared' in n for n in job['result']['notes'])
+
+
+def test_focus_is_off_by_setting(client, monkeypatch):
+    doc = upload(client).json()
+    seen = focus_transport(monkeypatch, {'answer':'x'})
+    monkeypatch.setenv('AI_FOCUS', 'false')
+    job = wait(client, client.post('/api/app/jobs', json={'task':'qa', 'question':'q', 'document_ids':[doc['id']]}).json()['id'])
+    assert job['result']['focus'] is None and seen == []
+
+
+def test_locate_matches_like_citation_checks():
+    from backend.app.focus import locate
+    quote = 'within   twelve\nhours from the occurrence of the “event”'
+    assert locate(quote, 'Twelve hours') == 'twelve\nhours'
+    assert locate(quote, 'the "event"') == 'the “event”'
+    assert locate(quote, 'twenty four hours') is None and locate(quote, '  ') is None

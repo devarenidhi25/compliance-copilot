@@ -1,119 +1,141 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useLibrary } from '../context';
 import { useJob } from '../hooks';
 import { api, type AIResult, type ResultItem } from '../lib/api';
 import { versionName } from '../lib/library';
-import { JobOutcome, Quote, ResultFooter, useWhere } from '../components/Results';
-import { Empty, ErrorNote, PageHead, RiskBadge } from '../components/ui';
+import { Details, JobOutcome, KeyQuote, usePlace } from '../components/Results';
+import { Empty, ErrorNote } from '../components/ui';
 
-type Filter = 'all' | 'high' | 'medium' | 'low' | 'review';
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All findings' },
-  { key: 'high', label: 'High risk' },
-  { key: 'medium', label: 'Partial' },
-  { key: 'low', label: 'Addressed' },
-  { key: 'review', label: 'Needs review' },
-];
+const KIND_LABEL: Record<string, string> = {
+  POTENTIAL_GAP: 'Gap',
+  POSSIBLE_CONFLICT: 'Conflict',
+  PARTIALLY_ADDRESSED: 'Partial',
+  APPEARS_ADDRESSED: 'Addressed',
+  INSUFFICIENT_EVIDENCE: 'Needs review',
+};
 
-function Evidence({ item, n, kindOf }: { item: ResultItem; n: number; kindOf: (id: string) => string | undefined }) {
-  const where = useWhere();
-  const groups = [
-    { label: 'Regulation says', citations: item.citations.filter((c) => kindOf(c.document_id) === 'regulatory') },
-    { label: 'Your policy says', citations: item.citations.filter((c) => kindOf(c.document_id) === 'internal') },
-  ];
+function Side({ item, kind, heading, label }: { item: ResultItem; kind: 'regulatory' | 'internal'; heading: string; label: number }) {
+  const { byId } = useLibrary();
+  const place = usePlace();
+  const citations = item.citations.filter((c) => byId.get(c.document_id)?.kind === kind);
   return (
-    <div className="evidence-pair">
-      {groups.map((group) => (
-        <div key={group.label}>
-          <div className="label">{group.label}</div>
-          {group.citations.length === 0 && <p className="small-text muted">Not located in the selected excerpts.</p>}
-          {group.citations.map((c) => (
-            <div key={c.chunk_id + c.quote} style={{ display: 'grid', gap: 2, marginBottom: 8 }}>
-              <Quote citation={c} label={n} />
-              <span className="small-text muted">{where(c)}</span>
-            </div>
-          ))}
-        </div>
-      ))}
+    <div>
+      <span className="label">{heading}{citations[0] ? ` · ${place.short(citations[0])}` : ''}</span>
+      {citations.length === 0 && <p className="small-text muted">Not located in the excerpts that were checked.</p>}
+      {citations.map((c) => <KeyQuote key={c.chunk_id + c.quote} citation={c} label={label} />)}
     </div>
   );
 }
 
-function GapResult({ result }: { result: AIResult }) {
-  const { byId } = useLibrary();
-  const [filter, setFilter] = useState<Filter>('all');
+function Pair({ item, label }: { item: ResultItem; label: number }) {
+  return (
+    <div className="pair">
+      <Side item={item} kind="regulatory" heading="The regulation requires" label={label} />
+      <Side item={item} kind="internal" heading="Your policy says" label={label} />
+    </div>
+  );
+}
+
+function AlsoRow({ item, label }: { item: ResultItem; label: number }) {
+  const [open, setOpen] = useState(false);
+  const badge = item.risk === 'low'
+    ? <span className="badge ok">✓ Addressed</span>
+    : item.risk === 'review'
+      ? <span className="badge dashed">Needs review</span>
+      : <span className="badge">{KIND_LABEL[item.assessment ?? ''] ?? 'Finding'} · {item.risk}</span>;
+  return (
+    <li className="also">
+      <span>{badge}</span>
+      <span style={{ fontSize: 16 }}>{item.statement}</span>
+      <button className="link" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide quotes' : 'Show quotes'}</button>
+      {open && <Pair item={item} label={label} />}
+    </li>
+  );
+}
+
+export function GapResult({ result }: { result: AIResult }) {
   const summary = result.gap_summary!;
-  const order = { high: 0, medium: 1, review: 2, low: 3 } as Record<string, number>;
-  const items = [...result.items].sort((a, b) => (order[a.risk ?? 'review'] ?? 2) - (order[b.risk ?? 'review'] ?? 2));
-  const shown = items.filter((item) => filter === 'all' || item.risk === filter);
-  const kindOf = (id: string) => byId.get(id)?.kind;
+  const numbered = result.items.map((item, i) => ({ item, n: i + 1 }));
+  const fixFirst = numbered.filter(({ item }) => item.risk === 'high');
+  const order: Record<string, number> = { medium: 0, review: 1, low: 2 };
+  const also = numbered.filter(({ item }) => item.risk !== 'high').sort((a, b) => (order[a.item.risk ?? 'review'] ?? 1) - (order[b.item.risk ?? 'review'] ?? 1));
+  const c = summary.counts;
+  const assessed = Math.max(summary.assessed_items, 1);
+  const addressed = c.APPEARS_ADDRESSED ?? 0;
+  const partial = c.PARTIALLY_ADDRESSED ?? 0;
+  const gaps = summary.high_risk_items;
 
   return (
-    <>
-      <section className="panel">
+    <div className="stack" style={{ gap: 40 }}>
+      <section className="verdict" aria-label="Verdict">
+        <h1>
+          {gaps > 0
+            ? <><mark>{gaps} gap{gaps > 1 ? 's' : ''} to fix</mark> before this policy matches the regulation.</>
+            : summary.assessed_items > 0
+              ? <>No high-risk gaps in the parts that were checked.</>
+              : <>The excerpts were not conclusive enough to assess this policy.</>}
+        </h1>
         <div className="score">
-          <div className="score-figure">{summary.score ?? '—'}{summary.score != null && <small>%</small>}</div>
-          <div>
-            <h2>{summary.score == null ? 'Not enough evidence to score' : 'of assessed requirements addressed'}</h2>
-            <p className="muted small-text" style={{ marginTop: 4 }}>
-              {summary.high_risk_items} high-risk finding{summary.high_risk_items === 1 ? '' : 's'}, {summary.assessed_items} assessed,
-              {' '}{summary.not_assessed_items} needing review because the excerpts were not conclusive.
-            </p>
-            {summary.score != null && <div className="meter" aria-hidden="true"><span style={{ width: `${summary.score}%` }} /></div>}
-            <details style={{ marginTop: 10 }}>
-              <summary>How the score is calculated</summary>
-              <p className="small-text muted">{summary.method}</p>
-            </details>
+          <div className="figure">
+            <strong>{summary.score == null ? '—' : `${summary.score}%`}</strong>
+            <span className="muted small-text">of assessed requirements addressed</span>
           </div>
+          <div className="scorebar" aria-hidden="true">
+            <span style={{ width: `${(addressed / assessed) * 100}%`, background: 'var(--ink)' }} />
+            <span style={{ width: `${(partial / assessed) * 100}%`, background: '#8c887d' }} />
+          </div>
+          <span className="label">{addressed} addressed · {partial} partial · {gaps} gap{gaps === 1 ? '' : 's'} · {summary.not_assessed_items} needs review</span>
         </div>
       </section>
-      <section className="panel">
-        <div className="row" style={{ marginBottom: 8 }}>
-          <div className="segmented" role="group" aria-label="Filter findings">
-            {FILTERS.map((f) => (
-              <button key={f.key} aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>
-                {f.label}{f.key !== 'all' ? ` (${items.filter((i) => i.risk === f.key).length})` : ''}
-              </button>
-            ))}
-          </div>
-        </div>
-        {shown.length === 0 && <Empty title="No findings in this group" />}
-        <div className="table-wrap"><table className="table">
-          <thead><tr><th style={{ width: '58%' }}>Finding and evidence</th><th>Policy status</th><th>Risk</th></tr></thead>
-          <tbody>
-            {shown.map((item, i) => (
-              <tr key={i}>
-                <td>
-                  <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
-                    <span className="num" aria-hidden="true">{i + 1}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <p className="statement" style={{ fontSize: 15 }}>{item.statement}</p>
-                      <Evidence item={item} n={i + 1} kindOf={kindOf} />
-                    </div>
-                  </div>
-                </td>
-                <td>{item.status_label}</td>
-                <td><RiskBadge risk={item.risk} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
-        <ResultFooter result={result} />
-      </section>
-    </>
+
+      {fixFirst.length > 0 && (
+        <section aria-labelledby="fix">
+          <div className="section-head"><h2 id="fix">Fix first</h2></div>
+          {fixFirst.map(({ item, n }) => (
+            <article key={n} className="fix-card">
+              <div className="fix-head">
+                <span className="badge solid">High risk · {KIND_LABEL[item.assessment ?? ''] ?? 'Gap'}</span>
+                <h3>{item.statement}</h3>
+              </div>
+              <Pair item={item} label={n} />
+            </article>
+          ))}
+        </section>
+      )}
+
+      {also.length > 0 && (
+        <section aria-labelledby="also">
+          <div className="section-head"><h2 id="also" style={{ fontSize: 18 }}>{fixFirst.length ? 'Also found' : 'Findings'}</h2></div>
+          <ul className="ruled">{also.map(({ item, n }) => <AlsoRow key={n} item={item} label={n} />)}</ul>
+        </section>
+      )}
+
+      <Details result={result} extra={<p style={{ marginTop: 8 }}>{summary.method}</p>} />
+    </div>
   );
 }
 
 export function Gaps() {
-  const { families } = useLibrary();
+  const { families, byId } = useLibrary();
   const { job, error, busy, start, forget, setError } = useJob('gaps');
   const regulations = families.filter((f) => f.kind === 'regulatory').flatMap((f) => f.versions).filter((d) => d.indexed);
   const policies = families.filter((f) => f.kind === 'internal').flatMap((f) => f.versions).filter((d) => d.indexed);
   const [regulationId, setRegulationId] = useState('');
   const [policyId, setPolicyId] = useState('');
   const [focus, setFocus] = useState('');
+  const [editing, setEditing] = useState(true);
   const regulation = regulationId || regulations[0]?.id || '';
   const policy = policyId || policies[0]?.id || '';
+
+  useEffect(() => {
+    if (!job) return;
+    setEditing(false);
+    const reg = job.document_ids.find((id) => byId.get(id)?.kind === 'regulatory');
+    const pol = job.document_ids.find((id) => byId.get(id)?.kind === 'internal');
+    if (reg) setRegulationId(reg);
+    if (pol) setPolicyId(pol);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, byId.size]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -121,49 +143,67 @@ export function Gaps() {
       start(await api.startJob('gap_analysis',
         focus.trim() || 'Assess whether the internal policy meets the requirements of the regulation, requirement by requirement.',
         [regulation, policy]));
+      setEditing(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     }
   };
 
+  if (!regulations.length || !policies.length) {
+    return (
+      <>
+        <h1>Gap analysis</h1>
+        <Empty title={!policies.length ? 'Upload one of your policies first' : 'Index a regulation first'}>
+          A gap check compares an indexed internal policy with an indexed regulation. Add them in the Library.
+        </Empty>
+      </>
+    );
+  }
+
+  const title = (id: string) => {
+    const doc = byId.get(id);
+    return doc ? `${doc.metadata.title.value} (${versionName(doc)})` : 'Document';
+  };
+
   return (
     <>
-      <PageHead title="Gap analysis" intro="Check one of your policies against a regulation. Each finding shows the regulation's words beside your policy's, with a status and a risk level." />
-      {!regulations.length || !policies.length ? (
-        <section className="panel">
-          <Empty title={!policies.length ? 'Upload an internal policy first' : 'Index a regulation first'}>
-            A gap check needs at least one indexed regulation and one indexed internal policy in the Library.
-          </Empty>
-        </section>
-      ) : (
-        <form className="panel stack" onSubmit={submit}>
+      {editing || !job ? (
+        <form className="stack" style={{ gap: 16 }} onSubmit={submit}>
+          <div className="page-head">
+            <div>
+              <h1>Gap analysis</h1>
+              <p>Check one of your policies against a regulation. You'll see what to fix first, with both documents' words side by side.</p>
+            </div>
+          </div>
           <div className="grid-2">
             <label className="field">
               <span>Regulation</span>
               <select className="select" value={regulation} onChange={(e) => setRegulationId(e.target.value)}>
-                {regulations.map((d) => <option key={d.id} value={d.id}>{d.metadata.title.value} ({versionName(d)})</option>)}
+                {regulations.map((d) => <option key={d.id} value={d.id}>{title(d.id)}</option>)}
               </select>
             </label>
             <label className="field">
               <span>Your policy</span>
               <select className="select" value={policy} onChange={(e) => setPolicyId(e.target.value)}>
-                {policies.map((d) => <option key={d.id} value={d.id}>{d.metadata.title.value} ({versionName(d)})</option>)}
+                {policies.map((d) => <option key={d.id} value={d.id}>{title(d.id)}</option>)}
               </select>
             </label>
           </div>
-          <label className="field">
-            <span>Focus (optional)</span>
-            <input className="input" value={focus} onChange={(e) => setFocus(e.target.value)} maxLength={4000}
-              placeholder="For example: customer identification and periodic KYC updates" />
-            <small>Narrowing the focus gives sharper findings; the check reads the most relevant excerpts of each document.</small>
-          </label>
+          <div className="askbar">
+            <label htmlFor="gap-focus" className="visually-hidden">Focus of the check (optional)</label>
+            <input id="gap-focus" value={focus} onChange={(e) => setFocus(e.target.value)} maxLength={4000}
+              placeholder="Focus, optional: for example, timelines for disclosing material events" />
+            <button className="button primary" type="submit" disabled={busy}>Run gap check</button>
+          </div>
           {error && <ErrorNote>{error}</ErrorNote>}
-          <div><button className="button primary" type="submit" disabled={busy}>Run gap check</button></div>
         </form>
+      ) : (
+        <p className="row" style={{ fontSize: 15, color: 'var(--text)' }}>
+          <span><strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{title(policy)}</strong> checked against <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{title(regulation)}</strong></span>
+          <button className="link" onClick={() => setEditing(true)} disabled={busy}>Change</button>
+        </p>
       )}
-      <div style={{ marginTop: 16 }}>
-        <JobOutcome job={job} onDismiss={forget}>{(result) => <GapResult result={result} />}</JobOutcome>
-      </div>
+      <JobOutcome job={job} onDismiss={() => { forget(); setEditing(true); }}>{(result) => <GapResult result={result} />}</JobOutcome>
     </>
   );
 }

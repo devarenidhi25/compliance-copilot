@@ -102,7 +102,7 @@ function UploadDrawer({ onClose }: { onClose: (uploaded?: LibraryDocument) => vo
   return (
     <div className="drawer-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <form className="drawer" onSubmit={submit} aria-label="Upload a document">
-        <div className="row"><h2 className="grow">Upload a document</h2><button type="button" className="button quiet small" onClick={() => onClose()}>Close</button></div>
+        <div className="row"><h2 className="grow">Upload a document</h2><button type="button" className="link" onClick={() => onClose()}>Close</button></div>
         <label className="field">
           <span>PDF file</span>
           <input className="input" type="file" accept="application/pdf" onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} required />
@@ -235,7 +235,7 @@ export function Library() {
       <IndexBanner />
       {message && <div className="notice info" style={{ marginBottom: 16 }}>{message}</div>}
       {error && <ErrorNote>{error}</ErrorNote>}
-      <section className="panel">
+      <section>
         <div className="row" style={{ marginBottom: 8 }}>
           <div className="segmented" role="group" aria-label="Show">
             {(['all', 'regulatory', 'internal'] as Scope[]).map((s) => (

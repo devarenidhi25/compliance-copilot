@@ -63,6 +63,25 @@ export function locateQuote(items: string[], quote: string): number[] | null {
   return null;
 }
 
+/** Split text into segments, marking each listed phrase (exact, first occurrence each). */
+export function markPhrases(text: string, phrases: string[]): { text: string; marked: boolean }[] {
+  const ranges: [number, number][] = [];
+  for (const phrase of phrases) {
+    const start = phrase ? text.indexOf(phrase) : -1;
+    if (start >= 0 && !ranges.some(([a, b]) => start < b && start + phrase.length > a)) ranges.push([start, start + phrase.length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const parts: { text: string; marked: boolean }[] = [];
+  let at = 0;
+  for (const [from, to] of ranges) {
+    if (from > at) parts.push({ text: text.slice(at, from), marked: false });
+    parts.push({ text: text.slice(from, to), marked: true });
+    at = to;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), marked: false });
+  return parts;
+}
+
 /** Split plain text into segments, marking the part that matches the quotation. */
 export function markQuote(content: string, quote: string): { text: string; marked: boolean }[] {
   const haystack = normalize(content);

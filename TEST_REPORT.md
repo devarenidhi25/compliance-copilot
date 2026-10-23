@@ -110,3 +110,21 @@ open. The app pins PDF.js 4.10.
 
 Not verified: real BGE-M3 and Ollama output in the app, Safari and Firefox, and
 screen-reader behaviour beyond semantic markup and labels.
+
+## Product redesign (direction D, answer first)
+
+Backend: **109 passed**, including 5 new tests for the answer-first focus step: validated
+answer, highlights and key phrases (whitespace, case and typography tolerant, returning
+the exact original span); phrases not in their quote and over-long labels dropped; a
+failing focus call keeps the verified answer with a note; `AI_FOCUS=false` skips the
+call; the audit trail stores the focused result. Frontend: **8 passed**; type-check and
+build clean.
+
+Browser walkthrough (Chromium, real server, the 291-page circular plus a second version
+and a sample policy, test embedder, stand-in model that also answers the focus call):
+sign-in; a question asked from a Home example chip lands on Ask with the short answer,
+highlights, labels and key phrases; a quote opens the PDF page with the highlight and its
+number; an action checklist; Library; Changes with counts and an AI explanation; Gaps
+with the verdict, a "fix first" card and expandable "also found" rows; Home showing the
+last answer and each tool's current fact; opening the last answer as its audit record;
+no horizontal overflow at 390 px; no console errors other than the deliberate 401.

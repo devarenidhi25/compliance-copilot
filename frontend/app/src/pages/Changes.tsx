@@ -22,12 +22,12 @@ function ChangeBlock({ change, result }: { change: Change; result: Comparison })
         <span className={`badge ${kind.tone}`}>{kind.label}</span>
         <div className="row small-text" style={{ gap: 4 }}>
           {change.change !== 'added' && (
-            <button className="button quiet small" onClick={() => open({ documentId: result.older.id, page: change.old_pages[0], quote: change.removed[0] })}>
+            <button className="link" onClick={() => open({ documentId: result.older.id, page: change.old_pages[0], quote: change.removed[0] })}>
               Earlier version, {pages(change.old_pages)}
             </button>
           )}
           {change.change !== 'removed' && (
-            <button className="button quiet small" onClick={() => open({ documentId: result.newer.id, page: change.new_pages[0], quote: change.added[0] })}>
+            <button className="link" onClick={() => open({ documentId: result.newer.id, page: change.new_pages[0], quote: change.added[0] })}>
               Later version, {pages(change.new_pages)}
             </button>
           )}
@@ -95,7 +95,7 @@ export function Changes() {
     return (
       <>
         <PageHead title="Change detection" />
-        <section className="panel">
+        <section>
           <Empty title="No document has two versions yet">
             Upload a newer version of a regulation in the Library and choose “new version of an existing document”. Then compare the two here.
           </Empty>
@@ -109,7 +109,7 @@ export function Changes() {
   return (
     <>
       <PageHead title="Change detection" intro="Line up two versions of a regulation and review every passage that was added, removed or modified, page by page." />
-      <section className="panel stack">
+      <section className="stack" style={{ gap: 14, maxWidth: 940 }}>
         <label className="field">
           <span>Document</span>
           <select className="select" value={familyId} onChange={(e) => setFamilyId(e.target.value)}>
@@ -133,32 +133,38 @@ export function Changes() {
       </section>
 
       {result && (
-        <section style={{ marginTop: 16 }}>
-          <div className="section-title">
-            <div>
-              <h2>
-                {result.total_changes === 0 ? 'No differences in the text' : `${result.total_changes} change${result.total_changes > 1 ? 's' : ''}`}
-              </h2>
-              <p className="muted small-text">
-                {result.counts.added} added, {result.counts.removed} removed, {result.counts.modified} modified.
-                From {versionName(result.older)} to {versionName(result.newer)}.
-                {result.reordered && ' The versions were put in date order.'}
-              </p>
+        <section className="stack" style={{ gap: 28 }} aria-label="Comparison">
+          <div className="answer-block">
+            <span className="label">{versionName(result.older)} → {versionName(result.newer)}{result.reordered ? ' · put in date order' : ''}</span>
+            <p className="answer-text">
+              {result.total_changes === 0
+                ? 'No differences in the text.'
+                : <><mark>{result.total_changes} change{result.total_changes > 1 ? 's' : ''}</mark> between these versions.</>}
+            </p>
+            <div className="counts">
+              <div><strong>{result.counts.added}</strong><span className="label">added</span></div>
+              <div><strong>{result.counts.removed}</strong><span className="label">removed</span></div>
+              <div><strong>{result.counts.modified}</strong><span className="label">reworded</span></div>
             </div>
-            {result.total_changes > 0 && (both
-              ? <button className="button" onClick={explainChanges} disabled={explain.busy}>Explain these changes</button>
-              : <span className="small-text muted">Index both versions to have the changes explained.</span>)}
+            {result.total_changes > 0 && (
+              <div className="row">
+                {both
+                  ? <button className="button primary" onClick={explainChanges} disabled={explain.busy}>Explain what this means</button>
+                  : <span className="small-text muted">Index both versions to have the changes explained.</span>}
+              </div>
+            )}
           </div>
           {explain.error && <ErrorNote>{explain.error}</ErrorNote>}
-          <div style={{ marginBottom: 16 }}>
-            <JobOutcome job={explain.job} onDismiss={explain.forget}>
-              {(answer) => <AnswerView result={answer} heading="What changed and what it means" />}
-            </JobOutcome>
+          <JobOutcome job={explain.job} onDismiss={explain.forget}>
+            {(answer) => <AnswerView result={answer} label="What changed and what it means" rowsHeading="Where each version says so" />}
+          </JobOutcome>
+          <div>
+            <div className="section-head"><h2>Every change, page by page</h2></div>
+            {result.changes.map((change, i) => <ChangeBlock key={i} change={change} result={result} />)}
+            {result.total_changes > result.changes.length && (
+              <p className="muted small-text" style={{ marginTop: 10 }}>Showing the first {result.changes.length} of {result.total_changes} changes.</p>
+            )}
           </div>
-          {result.changes.map((change, i) => <ChangeBlock key={i} change={change} result={result} />)}
-          {result.total_changes > result.changes.length && (
-            <p className="muted small-text" style={{ marginTop: 10 }}>Showing the first {result.changes.length} of {result.total_changes} changes.</p>
-          )}
         </section>
       )}
     </>

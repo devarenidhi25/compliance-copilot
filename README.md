@@ -46,19 +46,28 @@ only needed to change the app.
 
 | Page | What it does |
 | --- | --- |
-| Sign in | Name, role (Compliance Officer, Legal, Risk, Executive) and access code. The role orders the home page and is recorded in the audit trail. |
-| Home | Tasks in the order most useful for the role, library status, recent AI activity. |
-| Ask | A question or an action checklist over up to four regulations. Statements carry numbered citations; selecting one opens the PDF at the page with the quoted words highlighted. Removed statements are listed with the reason. |
-| Library | Documents grouped into version families with page counts, visibility and index status; upload drawer (including "new version of an existing document"); administrators can index from here. |
-| Change detection | Pick a document and two versions; every added, removed or modified passage with page links in both versions, and an optional AI explanation. |
-| Gap analysis | Pick a regulation and an internal policy; compliance score, findings sorted by risk, and the regulation's words beside the policy's for each finding. |
-| Audit trail | Every AI request with who asked, the role, documents, model, timing, outcome and the full recorded result. |
+| Sign in | Name, role (Compliance Officer, Legal, Risk, Executive) and access code. The role is recorded in the audit trail. |
+| Home | A question box with example questions, your last answer with its key words highlighted, and one current fact per tool (last gap check, versions ready to compare, documents ready). |
+| Ask | The answer first, in one or two sentences with the words that answer the question in lime, then "where the source says so": each statement with its quotation and the deciding phrase highlighted. Selecting a quote opens the page with it highlighted. Also drafts action checklists. |
+| Changes | Pick two versions; the number of added, removed and reworded passages first, an optional AI explanation, then every change with page links. |
+| Gaps | Pick a regulation and a policy; the verdict ("2 gaps to fix") and score first, then the high-risk findings with both documents' words side by side, then the rest. |
+| Library | Version families with page counts, visibility and index status; upload drawer; administrators index from here. |
+| Audit | Every AI request with who asked, role, outcome and the full recorded result. |
 
-AI requests run as background jobs, one at a time, with live progress (finding evidence,
-drafting, checking quotes). Reviewers can leave the page and come back to the result.
-The gap score is computed from the model's labels, not by the model: Addressed counts 1,
+AI requests run as background jobs, one at a time, with live progress. Reviewers can
+leave the page and come back to the result. The gap score and the "N gaps to fix"
+headline are computed from the model's labels, not by the model: Addressed counts 1,
 Partially addressed 0.5, Potential gap or Possible conflict 0, and Insufficient evidence
 is left out of the score and shown as "Needs review".
+
+**Answer-first focus.** After an answer passes citation validation, the product API
+makes one short extra model call for the one-sentence answer, the phrases in it to
+highlight, a short label per statement, and the key phrase in each quotation. Each key
+phrase must appear word for word in its quotation and each highlight in the answer;
+anything else is dropped. If the call fails, the verified statements are shown without
+the short answer. The short answer summarises verified statements and stays pending
+human review like everything else. Set `AI_FOCUS=false` to skip the extra call on slow
+machines (it adds roughly the time of a short generation).
 
 To change the app (Node 20 or newer):
 

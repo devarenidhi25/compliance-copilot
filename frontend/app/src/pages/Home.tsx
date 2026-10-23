@@ -1,98 +1,138 @@
-import { Link } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useLibrary } from '../context';
-import { useLoad } from '../hooks';
-import { api, type Role } from '../lib/api';
-import { formatDateTime } from '../lib/library';
-import { ROLE_LABELS, useSignedIn } from '../session';
-import { Empty } from '../components/ui';
+import { rememberJob, useLoad } from '../hooks';
+import { api, type AuditEntry } from '../lib/api';
+import { markPhrases } from '../lib/quote';
+import { formatDateTime, versionName } from '../lib/library';
+import { useSignedIn } from '../session';
+import { ErrorNote } from '../components/ui';
+import { defaultRegulations } from './Ask';
 
-const TASKS = {
-  ask: { to: '/ask', title: 'Ask about a regulation', text: 'Get an answer in plain language with the exact clauses it rests on.', go: 'Ask a question' },
-  gaps: { to: '/gaps', title: 'Check a policy for gaps', text: 'Compare one of your policies against a regulation and see what needs attention.', go: 'Start a gap check' },
-  changes: { to: '/changes', title: 'See what changed', text: 'Line up two versions of a circular and review every added, removed or modified passage.', go: 'Compare versions' },
-  library: { to: '/library', title: 'Manage the library', text: 'Upload regulations and internal policies, and keep version history in one place.', go: 'Open the library' },
-};
+const EXAMPLES = [
+  'When must a material event be disclosed to the stock exchanges?',
+  'Who must verify market rumours?',
+  'What must happen when a statutory auditor resigns?',
+];
 
-// Each role sees its most likely work first.
-const ORDER: Record<Role, (keyof typeof TASKS)[]> = {
-  compliance_officer: ['ask', 'gaps', 'changes', 'library'],
-  legal: ['changes', 'ask', 'gaps', 'library'],
-  risk: ['gaps', 'changes', 'ask', 'library'],
-  executive: ['ask', 'changes', 'gaps', 'library'],
-};
+/** The latest finished entries of each kind, with full results for the two the page shows. */
+async function loadRecent() {
+  const { entries } = await api.audit(40);
+  const done = entries.filter((e) => e.status === 'completed');
+  const lastAnswer = done.find((e) => e.task === 'qa');
+  const lastGap = done.find((e) => e.task === 'gap_analysis');
+  const [answer, gap] = await Promise.all([
+    lastAnswer ? api.auditEntry(lastAnswer.id) : null,
+    lastGap ? api.auditEntry(lastGap.id) : null,
+  ]);
+  return { answer, gap };
+}
 
-const TASK_NAMES: Record<string, string> = { qa: 'Question', checklist: 'Checklist', comparison: 'Change explanation', gap_analysis: 'Gap check' };
-
-function greeting() {
-  const hour = new Date().getHours();
-  return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+function LastAnswer({ entry }: { entry: AuditEntry }) {
+  const result = entry.result!;
+  const text = result.focus?.answer ?? result.items[0]?.statement;
+  if (!text) return null;
+  return (
+    <section aria-labelledby="last" className="stack" style={{ gap: 12 }}>
+      <h2 id="last" className="label">Your last answer · {formatDateTime(entry.created_at)}</h2>
+      <Link to={`/audit?open=${entry.id}`} className="last-answer">
+        <span className="q">{entry.question}</span>
+        <span className="a">{markPhrases(text, result.focus?.highlights ?? []).map((p, i) => (p.marked ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}</span>
+        <span className="go">OPEN ANSWER</span>
+      </Link>
+    </section>
+  );
 }
 
 export function Home() {
   const session = useSignedIn();
+  const navigate = useNavigate();
   const { library, families } = useLibrary();
-  const recent = useLoad(() => api.audit(6));
+  const recent = useLoad(loadRecent);
+  const [question, setQuestion] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
   const documents = library?.documents ?? [];
-  const regulations = families.filter((f) => f.kind === 'regulatory').length;
-  const policies = families.filter((f) => f.kind === 'internal').length;
-  const waiting = documents.filter((d) => !d.indexed).length;
+  const ready = documents.filter((d) => d.indexed);
+  const waiting = documents.length - ready.length;
+  const pages = ready.reduce((sum, d) => sum + d.page_count, 0);
+  const comparable = families.find((f) => f.kind === 'regulatory' && f.versions.length > 1);
+  const gapSummary = recent.data?.gap?.result?.gap_summary;
+  const scope = defaultRegulations(families);
+
+  const ask = async (text: string) => {
+    if (!text.trim() || !scope.length) return;
+    setBusy(true);
+    setError('');
+    try {
+      const job = await api.startJob('qa', text.trim(), scope);
+      rememberJob('ask', job.id);
+      navigate('/ask');
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+      setBusy(false);
+    }
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void ask(question);
+  };
 
   return (
     <>
-      <header className="page-head">
-        <div>
-          <h1>{greeting()}, {session.name.split(' ')[0]}</h1>
-          <p>Signed in as {ROLE_LABELS[session.role]} for {session.organization}.</p>
+      <section className="hero" aria-labelledby="hello">
+        <h1 id="hello">What do you need to check, {session.name.split(' ')[0]}?</h1>
+        <form className="askbar large" onSubmit={submit}>
+          <label htmlFor="home-q" className="visually-hidden">Ask about a regulation</label>
+          <input id="home-q" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask about RBI or SEBI regulation…" maxLength={4000} />
+          <button className="button primary" type="submit" disabled={busy || !question.trim() || !scope.length}>{busy ? 'Asking…' : 'Ask'}</button>
+        </form>
+        <div className="chips">
+          <span className="label">Try</span>
+          {EXAMPLES.map((example) => (
+            <button key={example} type="button" className="chip" disabled={busy || !scope.length} onClick={() => { setQuestion(example); void ask(example); }}>{example}</button>
+          ))}
         </div>
-      </header>
-      <div className="home">
-        <section className="panel">
-          <h2 style={{ marginBottom: 4 }}>What would you like to do?</h2>
-          <ul className="task-list">
-            {ORDER[session.role].map((key) => {
-              const task = TASKS[key];
-              return (
-                <li key={key}>
-                  <Link to={task.to}>
-                    <strong>{task.title}</strong>
-                    <span>{task.text}</span>
-                    <em className="go" style={{ fontStyle: 'normal' }}>{task.go}</em>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-        <div className="stack">
-          <section className="panel">
-            <div className="section-title"><h2>Library</h2><Link to="/library" className="small-text">View all</Link></div>
-            <div className="facts">
-              <div><strong>{regulations}</strong><span>regulations</span></div>
-              <div><strong>{policies}</strong><span>internal policies</span></div>
-              <div><strong>{documents.length}</strong><span>stored versions</span></div>
-              <div><strong>{waiting}</strong><span>waiting to be indexed</span></div>
-            </div>
-            {waiting > 0 && (
-              <p className="small-text muted" style={{ marginTop: 12 }}>
-                {session.isAdmin ? 'Index them from the Library so they can be used for answers.' : 'An administrator needs to index them before they can be used for answers.'}
-              </p>
-            )}
-          </section>
-          <section className="panel">
-            <div className="section-title"><h2>Recent activity</h2><Link to="/audit" className="small-text">Audit trail</Link></div>
-            {recent.data && recent.data.entries.length === 0 && <Empty title="Nothing yet">Questions and checks your team runs will appear here.</Empty>}
-            <ul className="activity">
-              {recent.data?.entries.map((entry) => (
-                <li key={entry.id}>
-                  <div className="small-text muted">{TASK_NAMES[entry.task]} by {entry.user_name ?? 'unknown'}, {formatDateTime(entry.created_at)}</div>
-                  <div style={{ color: 'var(--ink)' }}>{entry.question}</div>
-                  {entry.status === 'failed' && <span className="badge bad" style={{ marginTop: 4 }}>Did not complete</span>}
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      </div>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        <p className="status-line">
+          <span className={`dot${scope.length ? '' : ' wait'}`} aria-hidden="true" />
+          {scope.length
+            ? `Searching ${scope.length} ready regulation${scope.length > 1 ? 's' : ''} · every answer is checked against its source page`
+            : 'No regulation is ready yet. Upload one in the Library and index it.'}
+        </p>
+      </section>
+
+      {recent.data?.answer?.result && <LastAnswer entry={recent.data.answer} />}
+
+      <section aria-label="Tools" className="tiles">
+        <Link to="/gaps" className="tile">
+          <strong className="name">Gap analysis</strong>
+          <span className="desc">Check a policy against a regulation and see what to fix first.</span>
+          <span className="fact">
+            {gapSummary
+              ? <>Last check: <mark>{gapSummary.high_risk_items} high-risk gap{gapSummary.high_risk_items === 1 ? '' : 's'}</mark>{gapSummary.score != null ? `, ${gapSummary.score}% addressed` : ''}</>
+              : 'No policy checked yet'}
+          </span>
+        </Link>
+        <Link to="/changes" className="tile">
+          <strong className="name">Change detection</strong>
+          <span className="desc">See exactly what was added, removed or reworded between two versions.</span>
+          <span className="fact">
+            {comparable
+              ? <>{comparable.latest.metadata.title.value}: <strong>{versionName(comparable.versions[1])} → {versionName(comparable.versions[0])}</strong></>
+              : 'Upload a second version of a regulation to compare'}
+          </span>
+        </Link>
+        <Link to="/library" className="tile">
+          <strong className="name">Library</strong>
+          <span className="desc">Circulars and your internal policies, with every version kept.</span>
+          <span className="fact">
+            <strong>{ready.length} document{ready.length === 1 ? '' : 's'} ready</strong> · {pages} pages
+            {waiting > 0 && <> · {waiting} waiting to be indexed</>}
+          </span>
+        </Link>
+      </section>
     </>
   );
 }

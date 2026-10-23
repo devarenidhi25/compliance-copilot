@@ -10,5 +10,7 @@ import pytest
 def isolated_paths(tmp_path, monkeypatch):
     for variable, name in (('COPILOT_DB', 'corpus.sqlite3'), ('CHROMA_PATH', 'chroma'), ('EMBEDDING_MODEL_PATH', 'no-model')):
         monkeypatch.setenv(variable, str(tmp_path / 'isolated' / name))
+    # The answer-first focus call is tested explicitly; elsewhere it would reach a real local model.
+    monkeypatch.setenv('AI_FOCUS', 'false')
     for variable in ('OLLAMA_NUM_CTX', 'OLLAMA_TIMEOUT', 'OLLAMA_THINK', 'OLLAMA_PROMPT_CHARS', 'AI_CHUNKS_PER_DOCUMENT', 'OLLAMA_MODEL', 'COPILOT_ADMIN_TOKENS'):
         monkeypatch.delenv(variable, raising=False)
