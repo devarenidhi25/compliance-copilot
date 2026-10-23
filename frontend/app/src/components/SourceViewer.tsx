@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as pdfjs from 'pdfjs-dist';
-import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { api } from '../lib/api';
@@ -42,24 +42,32 @@ function PdfPage({ target, onPageCount }: { target: SourceTarget; onPageCount: (
   useEffect(() => {
     if (!width) return;
     let cancelled = false;
-    let page: PDFPageProxy | null = null;
+    let task: RenderTask | null = null;
     setStatus('loading');
     (async () => {
       try {
         const pdf = await loadPdf(target.documentId);
         if (cancelled) return;
         onPageCount(pdf.numPages);
-        page = await pdf.getPage(Math.min(Math.max(target.page, 1), pdf.numPages));
+        const page: PDFPageProxy = await pdf.getPage(Math.min(Math.max(target.page, 1), pdf.numPages));
+        if (cancelled) return;
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: width / base.width });
         const ratio = window.devicePixelRatio || 1;
-        const node = canvas.current!;
-        node.width = Math.floor(viewport.width * ratio);
-        node.height = Math.floor(viewport.height * ratio);
-        frame.current!.style.width = `${viewport.width}px`;
-        frame.current!.style.height = `${viewport.height}px`;
-        await page.render({ canvasContext: node.getContext('2d')!, viewport: page.getViewport({ scale: (width / base.width) * ratio }) }).promise;
-        if (cancelled) return;
+        // Each run draws on its own off-screen canvas and copies it in when finished, so a
+        // second run (the pane resizing, a new citation) can never draw over one in progress.
+        const offscreen = document.createElement('canvas');
+        offscreen.width = Math.floor(viewport.width * ratio);
+        offscreen.height = Math.floor(viewport.height * ratio);
+        task = page.render({ canvasContext: offscreen.getContext('2d')!, viewport: page.getViewport({ scale: (width / base.width) * ratio }) });
+        await task.promise;
+        if (cancelled || !canvas.current || !frame.current) return;
+        const node = canvas.current;
+        node.width = offscreen.width;
+        node.height = offscreen.height;
+        node.getContext('2d')!.drawImage(offscreen, 0, 0);
+        frame.current.style.width = `${viewport.width}px`;
+        frame.current.style.height = `${viewport.height}px`;
         if (!target.quote) {
           setMarks([]);
           setStatus('ready');
@@ -88,7 +96,7 @@ function PdfPage({ target, onPageCount }: { target: SourceTarget; onPageCount: (
     })();
     return () => {
       cancelled = true;
-      page?.cleanup();
+      task?.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.documentId, target.page, target.quote, target.label, width]);
