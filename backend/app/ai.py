@@ -6,6 +6,7 @@ survives validation.
 """
 import json
 import os
+import re
 import time
 
 import httpx
@@ -13,7 +14,9 @@ from starlette.concurrency import run_in_threadpool
 
 from .retrieval import Retrieval
 from .compare import diff_hunks, order_versions, page_set, render, stored_pages
-from .store import collapse_whitespace
+from sqlalchemy import text as sql
+
+from .store import _normalized, collapse_whitespace
 
 TASKS = {'qa','comparison','gap_analysis','checklist'}
 ASSESSMENTS = {'APPEARS_ADDRESSED','PARTIALLY_ADDRESSED','POTENTIAL_GAP','POSSIBLE_CONFLICT','INSUFFICIENT_EVIDENCE'}
@@ -29,6 +32,7 @@ SYSTEM_PROMPT = (
     'Use ONLY the provided evidence. Do not invent legal requirements, findings, citations or compliance certification. '
     'Every item needs at least one citation: chunk_id must be one of the provided evidence chunk_id values and quote must be '
     'copied word for word from that chunk\'s text (a full sentence or clause, not a single word). '
+    'Quote one continuous passage: never shorten a quote with "..." and never join separate passages. '
     'Your statement is model interpretation; quotations are source facts. '
     'For gaps say "not located in the selected excerpts", never claim absence from the whole policy. '
     'Missing retrieved evidence is not proof of noncompliance. '
@@ -169,6 +173,69 @@ async def call_model(prompt, config):
                            'Keep OLLAMA_THINK=false for reasoning models.') from exc
 
 
+ELLIPSIS = re.compile(r'\s*(?:\.{3,}|\u2026)\s*')
+SURROUNDING_QUOTES = '"\'\u201c\u201d\u2018\u2019 \n\t'
+MAX_ELLIPSIS_GAP = 400
+
+
+def _chunk(store, chunk_id):
+    with store.engine.connect() as conn:
+        row = conn.execute(sql('SELECT id, document_id, page, content FROM chunks WHERE id=:id'), {'id':chunk_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def _span_of_fragments(content, fragments):
+    """Exact source span running from the first to the last fragment, found in order; None if absent."""
+    haystack, positions = _normalized(content)
+    start = end = None
+    at = 0
+    for fragment in fragments:
+        needle = _normalized(fragment)[0]
+        found = haystack.find(needle, at)
+        if found < 0 or (end is not None and found - end > MAX_ELLIPSIS_GAP):
+            return None
+        start = found if start is None else start
+        end = found + len(needle)
+        at = end
+    return content[positions[start]:positions[end - 1] + 1]
+
+
+def resolve_citation(store, org, chunk_id, quote, allowed):
+    """Validate a model citation; the saved quotation is always exact source text.
+
+    The strict check (the quote, as written, inside the cited chunk) runs first and
+    decides every case it accepts. Only if it fails, two recoveries are tried, each
+    ending in the same strict check on an exact span of source text:
+    - a quote shortened with "..." whose pieces all appear, in order and close
+      together, in one passage is saved as the full passage between them;
+    - exact words attached to the wrong excerpt are attributed to the excerpt of the
+      same document (among those sent to the model) that contains them.
+    Paraphrases and words that are not in the evidence stay rejected.
+    """
+    try:
+        return store.citation(chunk_id, quote, org)
+    except ValueError as strict_failure:
+        cited = _chunk(store, chunk_id)
+        if not cited:
+            raise
+        fragments = [part.strip(SURROUNDING_QUOTES) for part in ELLIPSIS.split(quote.strip(SURROUNDING_QUOTES))]
+        fragments = [part for part in fragments if part]
+        if not fragments or max(len(_normalized(part)[0]) for part in fragments) < 12:
+            raise
+        with store.engine.connect() as conn:
+            siblings = [dict(r) for r in conn.execute(sql('SELECT id, document_id, page, content FROM chunks WHERE document_id=:doc'),
+                                                      {'doc':cited['document_id']}).mappings() if r['id'] in allowed and r['id'] != chunk_id]
+        siblings.sort(key=lambda r: (abs(r['page'] - cited['page']), r['id']))
+        for candidate in [cited, *siblings]:
+            span = _span_of_fragments(candidate['content'], fragments)
+            if span:
+                try:
+                    return store.citation(candidate['id'], span, org)
+                except ValueError:
+                    continue
+        raise strict_failure
+
+
 def validate_item(item, task, store, org, allowed, docs):
     """Return an accepted item or raise ValueError with the rejection reason."""
     if not isinstance(item, dict) or not isinstance(item.get('statement'), str) or not item['statement'].strip():
@@ -182,10 +249,12 @@ def validate_item(item, task, store, org, allowed, docs):
         if citation['chunk_id'] not in allowed:
             raise ValueError('Citation references a chunk that was not provided as evidence')
         try:
-            citations.append(store.citation(citation['chunk_id'], citation['quote'], org))
+            citations.append(resolve_citation(store, org, citation['chunk_id'], citation['quote'], allowed))
         except (ValueError, LookupError) as exc:
             # One unsupported quote makes the whole statement unsupported.
-            raise ValueError(f'Quotation failed source validation: {exc}') from exc
+            shown = ' '.join(citation['quote'].split())
+            shown = shown if len(shown) <= 160 else shown[:157] + '...'
+            raise ValueError(f'Quotation failed source validation: {exc} Model quote: "{shown}"') from exc
     cited = {c['document_id'] for c in citations}
     kinds = {d['kind'] for d in docs if d['id'] in cited}
     if task == 'comparison' and not all(d['id'] in cited for d in docs):
@@ -266,7 +335,8 @@ async def generate(store, body, org, retrieval=None):
             statement = item.get('statement') if isinstance(item, dict) else None
             rejected.append({'index':index, 'reason':str(exc), 'statement':statement if isinstance(statement, str) else None})
     if not items:
-        reasons = '; '.join(sorted({r['reason'] for r in rejected}))
+        unique = list(dict.fromkeys(r['reason'] for r in rejected))
+        reasons = '; '.join(unique[:3]) + (f'; and {len(unique) - 3} more' if len(unique) > 3 else '')
         raise RuntimeError(f'No model item passed evidence validation; no results accepted. Reasons: {reasons}')
     if rejected:
         notes.append(f'{len(rejected)} model item(s) were rejected by citation validation and are not shown as findings.')

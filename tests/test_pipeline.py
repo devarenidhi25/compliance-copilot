@@ -618,3 +618,39 @@ def test_database_indexes_and_foreign_keys(tmp_path):
     with pytest.raises(Exception):
         with store.engine.begin() as conn:
             conn.execute(sql("INSERT INTO chunks (id,document_id,page,start_offset,end_offset,content) VALUES ('c','missing-doc',1,0,1,'x')"))
+
+
+def run_qa_with_quotes(client, monkeypatch, make_items):
+    import backend.app.ai as module
+    doc=upload(client,pdf('SYNTHETIC rule: retain the demo identifier for five years and keep the records safely.','SYNTHETIC page two: review the demo register every quarter without delay.')).json()
+    chunks=client.get(f"/api/documents/{doc['id']}/chunks").json()
+    original=httpx.AsyncClient
+    def respond(request):
+        return httpx.Response(200,json={'message':{'content':json.dumps({'items':make_items(chunks)})}})
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(respond),**kw))
+    return client.post('/api/ai',json={'task':'qa','question':'retain identifier review register','document_ids':[doc['id']]})
+
+
+def test_quote_shortened_with_ellipsis_is_saved_as_the_full_source_passage(client,monkeypatch):
+    response=run_qa_with_quotes(client,monkeypatch,lambda chunks:[{'statement':'SYNTHETIC',
+        'citations':[{'chunk_id':chunks[0]['id'],'quote':'“retain the demo identifier … keep the records safely”'}]}])
+    assert response.status_code==200,response.text
+    quote=response.json()['items'][0]['citations'][0]['quote']
+    assert quote=='retain the demo identifier for five years and keep the records safely'
+
+
+def test_exact_words_on_the_wrong_excerpt_are_attributed_to_the_right_one(client,monkeypatch):
+    response=run_qa_with_quotes(client,monkeypatch,lambda chunks:[{'statement':'SYNTHETIC',
+        'citations':[{'chunk_id':chunks[0]['id'],'quote':'review the demo register every quarter'}]}])
+    assert response.status_code==200,response.text
+    citation=response.json()['items'][0]['citations'][0]
+    assert citation['page']==2 and citation['quote']=='review the demo register every quarter'
+
+
+def test_paraphrase_and_far_apart_fragments_stay_rejected_with_the_model_quote_shown(client,monkeypatch):
+    response=run_qa_with_quotes(client,monkeypatch,lambda chunks:[
+        {'statement':'SYNTHETIC paraphrase','citations':[{'chunk_id':chunks[0]['id'],'quote':'keep the demo identifier for 5 years'}]},
+        {'statement':'SYNTHETIC wrong order','citations':[{'chunk_id':chunks[0]['id'],'quote':'keep the records safely ... retain the demo identifier'}]}])
+    assert response.status_code==503
+    detail=response.json()['detail']
+    assert 'Model quote: "keep the demo identifier for 5 years"' in detail and 'wrong order' not in detail
