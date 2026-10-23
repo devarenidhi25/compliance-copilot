@@ -2,15 +2,14 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { LibraryProvider, SourceProvider, useSource } from '../context';
 import { ROLE_LABELS, useSession, useSignedIn } from '../session';
 import { SourcePane } from './SourceViewer';
-import { Icon } from './ui';
 
 const NAV = [
-  { to: '/', label: 'Home', icon: Icon.home, end: true },
-  { to: '/ask', label: 'Ask', icon: Icon.ask },
-  { to: '/library', label: 'Library', icon: Icon.library },
-  { to: '/changes', label: 'Change detection', icon: Icon.changes },
-  { to: '/gaps', label: 'Gap analysis', icon: Icon.gaps },
-  { to: '/audit', label: 'Audit trail', icon: Icon.audit },
+  { to: '/', label: 'Home', end: true },
+  { to: '/ask', label: 'Ask' },
+  { to: '/library', label: 'Library' },
+  { to: '/changes', label: 'Change detection' },
+  { to: '/gaps', label: 'Gap analysis' },
+  { to: '/audit', label: 'Audit trail' },
 ];
 
 function Workspace() {
@@ -18,7 +17,9 @@ function Workspace() {
   return (
     <div className={`workspace${target ? ' with-source' : ''}`}>
       <main className="main" id="main">
-        <Outlet />
+        <div className="main-inner">
+          <Outlet />
+        </div>
       </main>
       <SourcePane />
     </div>
@@ -32,26 +33,23 @@ export function Shell() {
     <LibraryProvider>
       <SourceProvider>
         <div className="shell">
-          <aside className="sidebar">
+          <header className="topbar">
             <div className="brand">
               <strong>Compliance Copilot</strong>
-              <span>RBI and SEBI regulation</span>
+              <span>{session.organization}</span>
             </div>
             <nav aria-label="Main">
               {NAV.map((item) => (
-                <NavLink key={item.to} to={item.to} end={item.end}>
-                  {item.icon}
-                  {item.label}
-                </NavLink>
+                <NavLink key={item.to} to={item.to} end={item.end}>{item.label}</NavLink>
               ))}
             </nav>
             <div className="who">
-              <strong>{session.name}</strong>
-              {ROLE_LABELS[session.role]}, {session.organization}
-              {session.isAdmin && <div style={{ marginTop: 4, color: 'var(--amber)' }}>Administrator</div>}
+              <span>
+                <strong>{session.name}</strong>, {ROLE_LABELS[session.role]}{session.isAdmin ? ' (administrator)' : ''}
+              </span>
               <button className="button small" onClick={signOut}>Sign out</button>
             </div>
-          </aside>
+          </header>
           <Workspace />
         </div>
       </SourceProvider>

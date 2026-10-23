@@ -91,7 +91,7 @@ function PdfPage({ target, onPageCount }: { target: SourceTarget; onPageCount: (
       page?.cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target.documentId, target.page, target.quote, width]);
+  }, [target.documentId, target.page, target.quote, target.label, width]);
 
   useEffect(() => {
     if (marks.length) frame.current?.querySelector('.pdf-mark')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -110,6 +110,12 @@ function PdfPage({ target, onPageCount }: { target: SourceTarget; onPageCount: (
         {marks.map((mark, i) => (
           <span key={i} className="pdf-mark" style={{ left: mark.left, top: mark.top, width: mark.width, height: mark.height }} />
         ))}
+        {target.label != null && marks.length > 0 && (
+          <span className="pdf-label" aria-hidden="true"
+            style={{ left: Math.max(2, Math.min(...marks.map((m) => m.left)) - 26), top: marks[0].top + marks[0].height / 2 - 10 }}>
+            {target.label}
+          </span>
+        )}
       </div>
     </>
   );
@@ -163,7 +169,7 @@ export function SourcePane() {
             </span>
           )}
         </div>
-        {target.quote && <p className="source-quote"><span className="quote-mark">{target.quote}</span></p>}
+        {target.quote && <p className="source-quote">{target.label != null && <strong>{target.label}. </strong>}<span className="hl">{target.quote}</span></p>}
       </div>
       <div className="source-body">
         {isHtml ? <TextSource target={target} /> : <PdfPage key={target.documentId} target={target} onPageCount={setPages} />}

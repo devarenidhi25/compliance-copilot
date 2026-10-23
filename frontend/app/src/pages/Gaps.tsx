@@ -3,7 +3,7 @@ import { useLibrary } from '../context';
 import { useJob } from '../hooks';
 import { api, type AIResult, type ResultItem } from '../lib/api';
 import { versionName } from '../lib/library';
-import { CitationButton, JobOutcome, ResultFooter } from '../components/Results';
+import { JobOutcome, Quote, ResultFooter, useWhere } from '../components/Results';
 import { Empty, ErrorNote, PageHead, RiskBadge } from '../components/ui';
 
 type Filter = 'all' | 'high' | 'medium' | 'low' | 'review';
@@ -15,27 +15,24 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'review', label: 'Needs review' },
 ];
 
-function Evidence({ item, kindOf }: { item: ResultItem; kindOf: (id: string) => string | undefined }) {
+function Evidence({ item, n, kindOf }: { item: ResultItem; n: number; kindOf: (id: string) => string | undefined }) {
+  const where = useWhere();
   const groups = [
     { label: 'Regulation says', citations: item.citations.filter((c) => kindOf(c.document_id) === 'regulatory') },
     { label: 'Your policy says', citations: item.citations.filter((c) => kindOf(c.document_id) === 'internal') },
   ];
-  let n = 0;
   return (
     <div className="evidence-pair">
       {groups.map((group) => (
         <div key={group.label}>
           <div className="label">{group.label}</div>
           {group.citations.length === 0 && <p className="small-text muted">Not located in the selected excerpts.</p>}
-          {group.citations.map((c) => {
-            n += 1;
-            return (
-              <p key={c.chunk_id + c.quote} className="small-text" style={{ marginBottom: 6 }}>
-                <span className="quote-mark">{c.quote}</span>
-                <CitationButton citation={c} n={n} />
-              </p>
-            );
-          })}
+          {group.citations.map((c) => (
+            <div key={c.chunk_id + c.quote} style={{ display: 'grid', gap: 2, marginBottom: 8 }}>
+              <Quote citation={c} label={n} />
+              <span className="small-text muted">{where(c)}</span>
+            </div>
+          ))}
         </div>
       ))}
     </div>
@@ -87,8 +84,13 @@ function GapResult({ result }: { result: AIResult }) {
             {shown.map((item, i) => (
               <tr key={i}>
                 <td>
-                  <p style={{ color: 'var(--ink)', fontSize: 15 }}>{item.statement}</p>
-                  <Evidence item={item} kindOf={kindOf} />
+                  <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+                    <span className="num" aria-hidden="true">{i + 1}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <p className="statement" style={{ fontSize: 15 }}>{item.statement}</p>
+                      <Evidence item={item} n={i + 1} kindOf={kindOf} />
+                    </div>
+                  </div>
                 </td>
                 <td>{item.status_label}</td>
                 <td><RiskBadge risk={item.risk} /></td>

@@ -34,6 +34,8 @@ export interface SourceTarget {
   page: number;
   quote?: string;
   section?: string | null;
+  /** The finding number shown beside the highlight on the source page. */
+  label?: number;
 }
 
 interface SourceContextValue {

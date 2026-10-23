@@ -34,21 +34,29 @@ export function SignIn() {
 
   return (
     <div className="signin">
-      <section className="signin-brand">
-        <div>
+      <div className="signin-inner">
+        <section className="signin-intro">
           <h1>Compliance Copilot</h1>
-          <p className="lede">Answers from RBI and SEBI regulation, with every quotation checked against the source before you see it.</p>
-        </div>
-        <p className="proof">
-          Ask about a circular, see what changed between versions, and check your policies for gaps.
-          Each finding links to the <mark>exact words on the exact page</mark> it came from.
-        </p>
-      </section>
-      <section className="signin-form">
-        <form onSubmit={submit}>
+          <p className="lede">
+            Answers from RBI and SEBI regulation. Every statement carries the exact words it rests on,
+            checked against the source page before you see it.
+          </p>
+          <figure className="sample" style={{ margin: 0 }} aria-label="Example of a verified statement">
+            <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+              <span className="num" aria-hidden="true">1</span>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <p className="statement">A board decision on a material event must reach the stock exchanges within 30 minutes of the meeting closing.</p>
+                <p className="quote"><span className="hl">thirty minutes from the closure of the meeting of the board of directors</span></p>
+                <figcaption className="meta">SEBI LODR Master Circular, Annexure 18A, page 236</figcaption>
+              </div>
+            </div>
+          </figure>
+        </section>
+
+        <form className="signin-form" onSubmit={submit}>
           <div>
             <h2>Sign in</h2>
-            <p className="muted" style={{ marginTop: 4 }}>Use the access code your administrator gave you.</p>
+            <p className="muted small-text" style={{ marginTop: 4 }}>Use the access code your administrator gave you.</p>
           </div>
           <label className="field">
             <span>Your name</span>
@@ -74,7 +82,7 @@ export function SignIn() {
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-      </section>
+      </div>
     </div>
   );
 }

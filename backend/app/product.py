@@ -254,7 +254,7 @@ def install(app, principal):
     """Create the audit table and register the product routes on an app."""
     # Windows can map script types wrongly in its registry; browsers refuse to run
     # module scripts (the app and the PDF worker) served with the wrong type.
-    for extension, kind in (('.js', 'text/javascript'), ('.mjs', 'text/javascript'), ('.css', 'text/css')):
+    for extension, kind in (('.js', 'text/javascript'), ('.mjs', 'text/javascript'), ('.css', 'text/css'), ('.woff2', 'font/woff2'), ('.woff', 'font/woff')):
         mimetypes.add_type(kind, extension)
     ensure_audit_table(app.state.store)
     app.state.job_runner = JobRunner()

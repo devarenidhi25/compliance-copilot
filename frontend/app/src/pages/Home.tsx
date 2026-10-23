@@ -81,9 +81,9 @@ export function Home() {
           <section className="panel">
             <div className="section-title"><h2>Recent activity</h2><Link to="/audit" className="small-text">Audit trail</Link></div>
             {recent.data && recent.data.entries.length === 0 && <Empty title="Nothing yet">Questions and checks your team runs will appear here.</Empty>}
-            <ul className="task-list">
+            <ul className="activity">
               {recent.data?.entries.map((entry) => (
-                <li key={entry.id} style={{ padding: '10px 0' }}>
+                <li key={entry.id}>
                   <div className="small-text muted">{TASK_NAMES[entry.task]} by {entry.user_name ?? 'unknown'}, {formatDateTime(entry.created_at)}</div>
                   <div style={{ color: 'var(--ink)' }}>{entry.question}</div>
                   {entry.status === 'failed' && <span className="badge bad" style={{ marginTop: 4 }}>Did not complete</span>}

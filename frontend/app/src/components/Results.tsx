@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { AIResult, Citation, Job, ResultItem } from '../lib/api';
 import { useLibrary, useSource } from '../context';
-import { duration, ErrorNote, Icon } from './ui';
+import { duration, ErrorNote } from './ui';
 
 const STEPS: { stage: Job['stage']; label: string }[] = [
   { stage: 'retrieving', label: 'Finding evidence' },
@@ -34,65 +34,70 @@ export function JobProgress({ job, onCancelView }: { job: Job; onCancelView?: ()
   );
 }
 
-/** Assigns one number per distinct citation, in order of first use. */
-function numberCitations(items: ResultItem[]) {
-  const numbers = new Map<string, number>();
-  const list: Citation[] = [];
-  for (const item of items) {
-    for (const citation of item.citations) {
-      const key = `${citation.chunk_id}|${citation.quote}`;
-      if (!numbers.has(key)) {
-        numbers.set(key, list.length + 1);
-        list.push(citation);
-      }
-    }
-  }
-  return { list, numberOf: (c: Citation) => numbers.get(`${c.chunk_id}|${c.quote}`)! };
+/** Where a citation sits, in words: the document and page (or section for HTML sources). */
+export function useWhere() {
+  const { byId } = useLibrary();
+  return (citation: Citation) => {
+    const doc = byId.get(citation.document_id);
+    const place = citation.section ? `section “${citation.section}”` : `page ${citation.page}`;
+    return `${doc?.metadata.title.value ?? 'Document'}, ${place}`;
+  };
 }
 
-export function CitationButton({ citation, n }: { citation: Citation; n: number }) {
+function useOpenCitation() {
   const { open } = useSource();
+  return (citation: Citation, label?: number) =>
+    open({ documentId: citation.document_id, page: citation.page, quote: citation.quote, section: citation.section, label });
+}
+
+/** A small numbered chip that opens the cited page. */
+export function CitationButton({ citation, n }: { citation: Citation; n: number }) {
+  const openCitation = useOpenCitation();
   return (
-    <button className="cite" title={`Open source ${n} on page ${citation.page}`} aria-label={`Open source ${n}, page ${citation.page}`}
-      onClick={() => open({ documentId: citation.document_id, page: citation.page, quote: citation.quote, section: citation.section })}>
+    <button className="cite" title={`Open the source at page ${citation.page}`} aria-label={`Open source ${n}, page ${citation.page}`}
+      onClick={() => openCitation(citation, n)}>
       {n}
     </button>
   );
 }
 
-export function SourceList({ citations, numberOf }: { citations: Citation[]; numberOf: (c: Citation) => number }) {
-  const { open } = useSource();
-  const { byId } = useLibrary();
+/** The quoted words in highlighter, clickable to open the page they come from. */
+export function Quote({ citation, label }: { citation: Citation; label?: number }) {
+  const openCitation = useOpenCitation();
   return (
-    <div className="sources">
-      {citations.map((citation) => {
-        const doc = byId.get(citation.document_id);
-        return (
-          <div className="source-row" key={`${citation.chunk_id}${citation.quote}`}>
-            <span className="num">{numberOf(citation)}</span>
-            <div>
-              <blockquote><span className="quote-mark">{citation.quote}</span></blockquote>
-              <div className="row small-text">
-                <span className="muted">
-                  {doc?.metadata.title.value ?? 'Document'}, {citation.section ? `section “${citation.section}”` : `page ${citation.page}`}
-                </span>
-                <button className="button quiet small" onClick={() => open({ documentId: citation.document_id, page: citation.page, quote: citation.quote, section: citation.section })}>
-                  Show in document
-                </button>
-              </div>
-            </div>
+    <p className="quote">
+      <button onClick={() => openCitation(citation, label)} aria-label={`Show this quotation on page ${citation.page}`}>
+        <span className="hl">{citation.quote}</span>
+      </button>
+    </p>
+  );
+}
+
+function Finding({ item, n }: { item: ResultItem; n: number }) {
+  const where = useWhere();
+  const openCitation = useOpenCitation();
+  return (
+    <li className="finding">
+      <span className="num" aria-hidden="true">{n}</span>
+      <div className="finding-body">
+        <p className="statement"><span className="visually-hidden">Statement {n}: </span>{item.statement}</p>
+        {item.citations.map((citation) => (
+          <div key={citation.chunk_id + citation.quote} style={{ display: 'grid', gap: 4 }}>
+            <Quote citation={citation} label={n} />
+            <button className="button quiet small where" style={{ justifySelf: 'start', padding: 0, minHeight: 28 }} onClick={() => openCitation(citation, n)}>{where(citation)}</button>
           </div>
-        );
-      })}
-    </div>
+        ))}
+      </div>
+    </li>
   );
 }
 
 export function Rejected({ result }: { result: AIResult }) {
   if (!result.rejected_items.length) return null;
+  const count = result.rejected_items.length;
   return (
     <details>
-      <summary>{result.rejected_items.length} statement{result.rejected_items.length > 1 ? 's' : ''} removed because the quote did not match the source</summary>
+      <summary>{count} statement{count > 1 ? 's' : ''} removed: the quote did not match the source</summary>
       <ul className="small-text">
         {result.rejected_items.map((item) => (
           <li key={item.index}>{item.statement ? <>“{item.statement}” — </> : null}{item.reason}</li>
@@ -104,48 +109,34 @@ export function Rejected({ result }: { result: AIResult }) {
 
 export function ResultFooter({ result }: { result: AIResult }) {
   return (
-    <div className="stack" style={{ gap: 10, marginTop: 18 }}>
+    <div className="result-foot">
       <Rejected result={result} />
+      <span>Pending human review</span>
+      <span>{result.model}, {duration(result.generation_seconds)}, {result.evidence_excerpts} excerpts searched</span>
+      {result.audit_id && <span>Audit reference {result.audit_id}</span>}
       {result.notes.length > 0 && (
-        <details>
+        <details style={{ flexBasis: '100%' }}>
           <summary>How this answer was produced</summary>
           <ul className="small-text">{result.notes.map((note) => <li key={note}>{note}</li>)}</ul>
-          <p className="small-text muted">{result.limitations}</p>
+          <p className="small-text muted" style={{ marginTop: 6 }}>{result.limitations}</p>
         </details>
       )}
-      <p className="small-text muted">
-        Pending human review. Generated by {result.model} in {duration(result.generation_seconds)} from {result.evidence_excerpts} excerpts
-        {result.audit_id ? <>. Audit reference {result.audit_id}</> : null}.
-      </p>
     </div>
   );
 }
 
-/** Answers, checklists and change explanations: statements with numbered sources. */
+/** Answers, checklists and change explanations: numbered statements, each with its quotation. */
 export function AnswerView({ result, heading }: { result: AIResult; heading: ReactNode }) {
-  const { list, numberOf } = numberCitations(result.items);
-  const asList = result.task === 'checklist';
+  const verified = result.items.length;
   return (
-    <section className="panel">
-      <div className="section-title">
+    <section aria-label="Result">
+      <div className="answer-head">
         <h2>{heading}</h2>
-        <span className="verified">{Icon.check} Every quote checked against the source</span>
+        <span className="verified">{verified} statement{verified === 1 ? '' : 's'} verified against the source</span>
       </div>
-      {asList ? (
-        <ol className="answer">
-          {result.items.map((item, i) => (
-            <li key={i} className="answer-item">{item.statement}{item.citations.map((c) => <CitationButton key={c.chunk_id + c.quote} citation={c} n={numberOf(c)} />)}</li>
-          ))}
-        </ol>
-      ) : (
-        <div className="answer">
-          {result.items.map((item, i) => (
-            <p key={i} className="answer-item">{item.statement}{item.citations.map((c) => <CitationButton key={c.chunk_id + c.quote} citation={c} n={numberOf(c)} />)}</p>
-          ))}
-        </div>
-      )}
-      <h3 style={{ marginTop: 22, marginBottom: 6 }}>Sources</h3>
-      <SourceList citations={list} numberOf={numberOf} />
+      <ol className="answer">
+        {result.items.map((item, i) => <Finding key={i} item={item} n={i + 1} />)}
+      </ol>
       <ResultFooter result={result} />
     </section>
   );
