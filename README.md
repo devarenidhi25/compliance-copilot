@@ -1,245 +1,258 @@
-# Compliance Copilot — grounded hybrid retrieval
+# Comnet — Compliance Copilot
 
-A locally runnable compliance assistant built with FastAPI, SQLAlchemy/SQLite, PyMuPDF,
-BM25 and persistent Chroma vectors (BGE-M3), and a local Ollama model. It supports PDF
-upload, restricted official RBI/SEBI URL import, explicit metadata provenance, immutable
-version families, page-scoped chunks, citation validation, organization-isolated
-internal policies, line-aligned version comparison, and hybrid search with reciprocal
-rank fusion (RRF). No regulatory documents are seeded. A small browser interface is
-served by the backend.
+Comnet is a local-first compliance research prototype for finding and reviewing
+evidence in RBI and SEBI documents alongside an organization's own policies. It
+addresses a practical review problem: requirements and internal controls are spread
+across lengthy PDFs and changing circulars, making it slow to locate relevant clauses,
+compare versions, and explain findings with traceable sources.
 
-Four AI workflows (Q&A, version comparison, gap analysis, checklist) answer only from
-selected stored evidence. Every accepted statement carries quotations that are
-validated against the stored source text; unsupported statements are dropped and
-reported. This is a local development application, not a production compliance
-platform, and it makes no legal determinations.
+Comnet stores uploaded documents and extracted page text locally, retrieves relevant
+passages, and supports four evidence-based review workflows: regulatory Q&A, version
+comparison, policy gap analysis, and action checklists. Accepted AI statements include
+quotations checked against the stored document text and links to the source page.
+Compliance, legal, risk, and audit teams can use it to accelerate research and prepare
+human reviews; it does not certify compliance, determine legal applicability, or
+replace professional judgment.
 
-## Run
+## What is implemented
 
-Python 3.10+ is supported. From the repository root:
+- **Document library and version families:** Upload searchable PDFs, record metadata,
+  preserve each version immutably, and compare versions in the same family. PDF pages,
+  extracted text, chunk offsets, and content hashes are retained in a local SQLite
+  database. Documents are not preloaded at startup.
+- **Search:** BM25 keyword search, local BGE-M3 semantic vectors, and hybrid search.
+  Hybrid results merge each retriever's top candidates with reciprocal rank fusion
+  (RRF, constant 60). Similarity and ranking scores are retrieval signals, not
+  compliance probabilities.
+- **Evidence-based AI review:** Q&A, version comparison, gap analysis, and checklists
+  use selected stored evidence through a locally hosted Ollama model. Quotations must
+  match stored text; invalid items are rejected and reported. The optional short,
+  answer-first summary is built from verified statements and is itself subject to
+  human review.
+- **Review aids:** A line-aligned version diff identifies added, removed, and reworded
+  passages; gap findings receive deterministic status, risk, and score values based on
+  the model's labels. The web app shows citations, source pages, index state, AI job
+  progress, and an organization-scoped audit trail.
+- **Document access:** Server-configured bearer tokens scope private documents to an
+  organization. Administrator tokens can manage the shared library and run indexing.
+  This is development authentication, not enterprise identity management.
+- **Optional official-source ingestion:** Import a direct PDF URL from an allowlisted
+  RBI or SEBI host, or explicitly run the bounded crawler described below. Host checks
+  establish source provenance only; they do not establish that metadata, applicability,
+  or interpretations are legally correct.
 
-```sh
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip==25.2
-.venv/bin/pip install -r backend/requirements.txt
-export COPILOT_ORG_TOKENS='{"your-organization":"replace-with-a-strong-unique-token"}'
-export COPILOT_ADMIN_TOKENS='{"your-organization":"replace-with-a-different-admin-token"}'
-.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
-```
+All generated findings remain pending human review. Citation checks establish that a
+quote comes from stored source text; they do not establish that an interpretation is
+correct or that retrieved excerpts cover every relevant requirement.
 
-On Windows (Git Bash) the virtual-environment folder is `Scripts` instead of `bin`, for
-example `.venv/Scripts/uvicorn ...` and `.venv/Scripts/python -m ...`. The requirements
-install CPU-only PyTorch on Windows and Linux and the standard PyTorch wheel on macOS.
-If your system drive is short of space, set `PIP_CACHE_DIR`, `HF_HOME` and (for Ollama)
-`OLLAMA_MODELS` to folders on another drive before installing or downloading.
+## Data sources
 
-Open `http://127.0.0.1:8000` and sign in with your name, your role and a configured
-token as the access code. The previous developer page remains at `/console`, and the
-API reference is at `/docs`. Keep this server local; token mapping is development
-authentication, not a replacement for real identity management.
+The application starts with an empty database. It uses documents that an operator
+uploads or imports; it does not silently download or seed regulatory material.
 
-## Web app
+- **Primary evidence:** User-provided searchable PDFs, including RBI and SEBI
+  regulatory documents and organization-owned internal policies/SOPs. Direct URL
+  imports are limited to official RBI/SEBI hosts.
+- **Crawler registry:** [`datasets/official_sources.json`](datasets/official_sources.json)
+  lists eight official RBI and SEBI listing pages. Only RBI notifications, Master
+  Directions, and FAQs are enabled initially; SEBI listings and RBI press releases are
+  disabled. The opt-in crawler is bounded, does not run at startup, and cannot follow
+  RBI ASP.NET postback pagination. It is not a continuous regulatory feed.
+- **Retrieval evaluation:** The repository includes a SEBI LODR Master Circular PDF and
+  a 12-question expected-page file in `datasets/`. These support an explicit retrieval
+  evaluation after the same PDF is uploaded and indexed; neither is automatically
+  loaded into the application's corpus. The recorded BM25 baseline is hit@6 0.833 and
+  MRR@6 0.750 for that question set only. Semantic and hybrid evaluation require the
+  local embedding model and should be measured on the operator's machine.
+- **Development fixtures:** `tests/fixtures/` contains clearly marked synthetic KYC
+  examples for isolated tests, not real policy or regulatory evidence.
 
-The client-facing app (React, TypeScript, Vite) lives in `frontend/app/`. Its built
-files in `frontend/app/dist/` are committed, so running the server is enough: Node is
-only needed to change the app.
+See [`datasets/README.md`](datasets/README.md) for source handling, import limits,
+version metadata, crawler behavior, and evaluation details.
 
-| Page | What it does |
-| --- | --- |
-| Sign in | Name, role (Compliance Officer, Legal, Risk, Executive) and access code. The role is recorded in the audit trail. |
-| Home | A question box with example questions, your last answer with its key words highlighted, and one current fact per tool (last gap check, versions ready to compare, documents ready). |
-| Ask | The answer first, in one or two sentences with the words that answer the question in lime, then "where the source says so": each statement with its quotation and the deciding phrase highlighted. Selecting a quote opens the page with it highlighted. Also drafts action checklists. |
-| Changes | Pick two versions; the number of added, removed and reworded passages first, an optional AI explanation, then every change with page links. |
-| Gaps | Pick a regulation and a policy; the verdict ("2 gaps to fix") and score first, then the high-risk findings with both documents' words side by side, then the rest. |
-| Library | Version families with page counts, visibility and index status; upload drawer; administrators index from here. |
-| Audit | Every AI request with who asked, role, outcome and the full recorded result. |
+## Technology
 
-AI requests run as background jobs, one at a time, with live progress. Reviewers can
-leave the page and come back to the result. The gap score and the "N gaps to fix"
-headline are computed from the model's labels, not by the model: Addressed counts 1,
-Partially addressed 0.5, Potential gap or Possible conflict 0, and Insufficient evidence
-is left out of the score and shown as "Needs review".
+- **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy, SQLite, PyMuPDF,
+  `rank-bm25`, ChromaDB, Sentence Transformers, and PyTorch.
+- **Retrieval models:** BM25 token matching and BGE-M3 embeddings run locally.
+  Embedding weights are downloaded explicitly, not during install, upload, or startup.
+- **Generation:** Ollama serves the configured local model (default `qwen3:8b`).
+  Documents and prompts are sent to that configured Ollama endpoint; no hosted model
+  inference is built into the application.
+- **Web app:** React 19, TypeScript, Vite, and PDF.js. The committed production build is
+  served by FastAPI; Node.js 20+ is needed to work on or rebuild the frontend.
 
-**Answer-first focus.** After an answer passes citation validation, the product API
-makes one short extra model call for the one-sentence answer, the phrases in it to
-highlight, a short label per statement, and the key phrase in each quotation. Each key
-phrase must appear word for word in its quotation and each highlight in the answer;
-anything else is dropped. If the call fails, the verified statements are shown without
-the short answer. The short answer summarises verified statements and stays pending
-human review like everything else. Set `AI_FOCUS=false` to skip the extra call on slow
-machines (it adds roughly the time of a short generation).
+## Run locally
 
-To change the app (Node 20 or newer):
+Commands below use PowerShell from the repository root. Python 3.10+ is required.
 
-```sh
-cd frontend/app
+1. Create the environment and install the pinned backend dependencies:
+
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install --upgrade pip==25.2
+   .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+   ```
+
+2. Configure separate organization and administrator tokens. Use long, unique values;
+   the JSON maps organization names to bearer tokens:
+
+   ```powershell
+   $env:COPILOT_ORG_TOKENS = '{"example-org":"replace-with-a-strong-token"}'
+   $env:COPILOT_ADMIN_TOKENS = '{"example-org":"replace-with-a-different-admin-token"}'
+   ```
+
+3. Start the API and web app:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+   ```
+
+   Open `http://127.0.0.1:8000`. Sign in with a display name, role, and configured
+   token. The name and role are self-declared audit labels, not authentication.
+   The older developer console is at `/console`; the API reference is at `/docs`.
+   Keep this prototype on a trusted local machine: its token mapping is not a production
+   identity or deployment boundary.
+
+4. To enable semantic/hybrid retrieval and AI answers, download the embedding model
+   explicitly, then have an administrator build the index:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m backend.app.index_cli download-model
+   .\.venv\Scripts\python.exe -m backend.app.index_cli sync
+   ```
+
+   Alternatively, an administrator can use **Index now** in the Library. Sync again
+   after adding documents. To rebuild after changing the embedding model, use
+   `.\.venv\Scripts\python.exe -m backend.app.index_cli rebuild`. Run a single server
+   worker; do not write to Chroma from a second process while the server is using it.
+
+5. To enable AI workflows, install and start Ollama separately and download the
+   configured model:
+
+   ```powershell
+   ollama pull qwen3:8b
+   ```
+
+   Ollama defaults to `http://localhost:11434`. Document upload and BM25-only
+   inspection do not require Ollama; semantic or hybrid search requires the embedding
+   model and a synchronized index. CPU-only generation may be slow.
+
+### Frontend development
+
+With Node.js 20+:
+
+```powershell
+Set-Location frontend\app
 npm ci
-npm run dev     # http://localhost:5173, API calls proxied to the server on port 8000
-npm test        # unit tests for quote highlighting and version grouping
-npm run build   # type-check and rebuild dist/, which the server serves
+npm run dev       # Vite at http://localhost:5173; proxies /api to port 8000
+npm test          # frontend unit tests
+npm run build     # type-check and rebuild dist/, served by FastAPI
 ```
 
-The app's API is under `/api/app` (`me`, `library`, `jobs`, `compare`, `audit`) and is
-additive: the original endpoints are unchanged. The name and role sent with requests
-are self-declared display values for the audit trail, not authentication.
+### Configuration
 
-### Tokens and document visibility
-
-- `COPILOT_ORG_TOKENS` maps organization names to tokens. A token's organization decides
-  which internal documents it can see.
-- `COPILOT_ADMIN_TOKENS` uses the same format. An administrator token belongs to its
-  organization and can additionally write to the shared library and run index jobs.
-- Malformed token JSON stops the server at startup with a clear message.
-
-| Document | Who can see it |
-| --- | --- |
-| Internal policy / SOP | The uploading organization only |
-| Regulatory PDF uploaded with an organization token | The uploading organization only |
-| Regulatory PDF uploaded with an administrator token | Everyone (shared library) |
-| Official URL import or crawler ingestion (host-verified) | Everyone (shared library) |
-
-Only administrators can add versions to a shared document family. The interface labels
-every document as shared or organization-only and shows whether each metadata field is
-user supplied or verified.
-
-## Local AI with Ollama
-
-Install Ollama, then pull the model (on Windows the Ollama app runs in the background
-after installation, so `ollama serve` is usually unnecessary):
-
-```sh
-ollama pull qwen3:8b
-```
+All paths default to locations under the repository root; the `data/` directory is
+runtime state and is git-ignored.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
-| `OLLAMA_MODEL` | `qwen3:8b` | Model name; `qwen3:4b` is about twice as fast on CPU |
-| `OLLAMA_NUM_CTX` | `16384` | Context window sent with every request (Ollama's own default silently truncates long prompts) |
-| `OLLAMA_TIMEOUT` | `300` | Seconds allowed per generation; raise it on CPU-only machines |
-| `OLLAMA_THINK` | `false` | Reasoning mode; keep off for qwen3, which otherwise returns an empty JSON object |
-| `AI_CHUNKS_PER_DOCUMENT` | `6` | Evidence excerpts per selected document (1–20); lower it to speed up CPU generation |
-| `OLLAMA_PROMPT_CHARS` | derived from `OLLAMA_NUM_CTX` | Prompt size budget; lowest-ranked excerpts are dropped first, one per document is always kept |
+| `COPILOT_ORG_TOKENS` | `{}` | JSON map of organization names to user tokens |
+| `COPILOT_ADMIN_TOKENS` | `{}` | JSON map of organization names to administrator tokens |
+| `COPILOT_DB` | `data/corpus.sqlite3` | SQLite document and evidence store |
+| `CHROMA_PATH` | `data/chroma` | Persistent vector index |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | Embedding model identity |
+| `EMBEDDING_MODEL_PATH` | `data/models/bge-m3` | Downloaded local model |
+| `EMBEDDING_DEVICE` | `cpu` | Sentence Transformer device |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | `qwen3:8b` | Ollama model name |
+| `OLLAMA_NUM_CTX` | `16384` | Context window |
+| `OLLAMA_TIMEOUT` | `300` | Generation timeout in seconds |
+| `OLLAMA_THINK` | `false` | Ollama reasoning-mode flag |
+| `OLLAMA_PROMPT_CHARS` | Derived from context window | Prompt character budget |
+| `AI_CHUNKS_PER_DOCUMENT` | `6` | Evidence excerpts per selected document (1–20) |
+| `AI_FOCUS` | `true` | Enable the short answer-first model call |
 
-Suggested CPU-only settings: `OLLAMA_NUM_CTX=8192`, `OLLAMA_TIMEOUT=900`,
-`AI_CHUNKS_PER_DOCUMENT=3`. Failures report the specific cause: timeout, Ollama
-unreachable, Ollama errors such as insufficient memory, missing model, or output that
-is not JSON. Successful responses include `generation_seconds`, the model and the
-number of evidence excerpts used. Ingested documents remain usable when Ollama is off.
+### Use the application
 
-## Embedding model and search index
+Upload regulatory PDFs and internal policies in **Library**, enter their metadata,
+and select them for review. After indexing, use **Ask** for a regulatory question,
+**Changes** to compare two versions, or **Gaps** to compare a regulatory document
+with an internal policy. The app displays validated quotations and page references;
+open the cited source and verify the evidence before acting. Gap scores are a
+deterministic summary of model labels, not an assurance or independent compliance
+assessment.
 
-Model weights are never downloaded during installation, upload, search or startup.
-Download them explicitly (about 2.3 GB; internet, disk and RAM required):
+The authenticated API also exposes document upload/import, retrieval, citation
+validation, version diff, AI requests, and administrator index operations. Interactive
+API schemas are available at `/docs`.
 
-```sh
-.venv/bin/python -m backend.app.index_cli download-model
+### Crawler and retrieval evaluation
+
+The crawler is an explicit, bounded operation; it is not run by the server:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.regulatory_ingest
 ```
 
-The default model is `BAAI/bge-m3`, loaded locally with Sentence Transformers. The
-command records the exact Hub snapshot revision under `data/models/bge-m3/`. No hosted
-inference receives your documents. Restart the server after downloading a model.
+It writes a run report to `data/ingestion-report.json`; inspect failures and unsupported
+pagination in the report. Tests mock external HTTP responses, so they do not prove that
+live publisher sites are accessible. Respect publisher terms and download limits.
 
-After uploading documents, index them. The recommended way is the **Search index
-(administrator)** panel in the interface, or the equivalent API, which runs the job
-inside the server process in the background:
+After uploading the bundled SEBI LODR circular and syncing its index, run the
+12-question retrieval evaluation:
 
-```sh
-curl -X POST "http://127.0.0.1:8000/api/admin/index/sync" -H "Authorization: Bearer <admin-token>"
-curl "http://127.0.0.1:8000/api/admin/index/sync" -H "Authorization: Bearer <admin-token>"   # job status
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.eval_cli
+.\.venv\Scripts\python.exe -m backend.app.eval_cli --modes bm25 --report data\eval-report.json
 ```
 
-Add `?rebuild=true` for a full rebuild, needed after changing the embedding model.
-The command-line equivalents (`index_cli sync`, `rebuild`, `status`) still work, but
-Chroma's store is not designed to be written by a second process while the server
-reads it: stop the server first, or restart it afterwards.
-
-Rebuilds stage a new collection and switch over only after success; a failed rebuild
-keeps the previous index. Old collections are retained and consume disk. Incremental
-sync upserts stable chunk IDs and never duplicates vectors. Run a single server worker.
-
-### Paths and configuration
-
-Default paths resolve from the repository root, so the server and tools work from any
-working directory. Environment variables override them.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `COPILOT_DB` | `data/corpus.sqlite3` | Authoritative document/page/chunk database |
-| `CHROMA_PATH` | `data/chroma` | Persistent vectors and active-index manifest |
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | Model identity to download/use |
-| `EMBEDDING_MODEL_PATH` | `data/models/bge-m3` | Local model directory with setup marker |
-| `EMBEDDING_DEVICE` | `cpu` | Inference device |
-
-The index records the resolved corpus path; after moving the database, rebuild.
-
-## Search
-
-`POST /api/retrieval/search` accepts `query`, `mode` (`bm25`, `semantic`, `hybrid`),
-`limit` (1–20) and optional `filters`: `document_ids`, `regulator`, `kind`,
-`family_id`, `version` and `document_type`. Results keep exact text, physical PDF
-page, chunk/document/family IDs, visibility and metadata provenance.
-
-When a search is not restricted to explicit `document_ids`, documents that are not yet
-indexed are searched by keyword only and listed in `unindexed_documents`, so one new
-upload does not break search for everyone. Explicitly selected documents, as AI
-generation uses, must be fully indexed; there is no silent keyword-only AI fallback.
-
-BM25 tokenizes lowercase Unicode words; semantic search uses normalized dense vectors
-and cosine distance. Hybrid search merges the top 20 candidates per retriever using RRF
-(constant 60). Ranking scores are not compliance probabilities.
-
-## AI workflows
-
-- **Q&A** answers from the selected regulatory documents; selected internal documents
-  are not used, and the response says so.
-- **Checklist** proposes reviewable actions from the selected documents.
-- **Gap analysis** needs regulatory and internal documents; each finding must cite at
-  least one of each and carry one label: `APPEARS_ADDRESSED`, `PARTIALLY_ADDRESSED`,
-  `POTENTIAL_GAP`, `POSSIBLE_CONFLICT` or `INSUFFICIENT_EVIDENCE`.
-- **Comparison** needs two versions from one family. Versions are ordered by effective
-  date, then publication date, then upload time. Changes are found by aligning lines
-  across the whole document, so an inserted page is one change rather than every later
-  page; the first ten changes and evidence from the changed pages are sent to the model.
-
-Quotations are matched ignoring whitespace and typographic quote/dash differences, must
-be at least 12 characters (unless the whole chunk), and the stored citation is always
-the exact original source span. Each model item is validated independently: items with
-an unsupported quotation, a chunk ID that was not provided, missing required citations
-or an invalid label are dropped and listed in `rejected_items` with the reason. The
-request fails only when no item survives. Every item remains `pending_human_review`.
-Citation validation checks provenance, not whether the interpretation is correct.
-
-`GET /api/compare?old=…&new=…` returns the text diff and a list of changed passages with
-their page ranges in both versions, without AI interpretation.
-
-## Official-source crawler and evaluation
-
-`python -m backend.app.regulatory_ingest` performs bounded ingestion from the listing
-pages in `datasets/official_sources.json` into the shared library. RBI listings
-paginate with ASP.NET postbacks, which are not followed; the report lists them under
-`unfollowed_pagination`. See [datasets/README.md](datasets/README.md) for sources,
-versioning and the retrieval evaluation (`python -m backend.app.eval_cli`), which
-reports hit@6 and MRR@6 per search mode for a question set with known answer pages.
+The evaluator reports hit@6 and MRR@6 per search mode against expected PDF pages.
+Semantic/hybrid modes need the downloaded BGE-M3 model and a built index; the BM25
+baseline above is not a general quality or compliance metric.
 
 ## Tests
 
-```sh
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -q
+Run the backend suite from the repository root:
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-On Windows Git Bash: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/Scripts/python -m pytest -q`.
-Tests use synthetic PDFs in temporary databases, deterministic test-only embeddings and
-mocked network/model responses. They are isolated from your `data/` folder and any
-downloaded model, and never download documents or models.
+Tests use temporary databases, synthetic documents, deterministic test embeddings,
+and mocked model/network responses; they do not require live AI or publisher access.
+The frontend unit tests and production type-check/build are run with the commands in
+**Frontend development**.
 
-## Known limits
+## Project structure
 
-The web app has unit tests for its logic but no automated browser tests in the suite; it
-was checked by a scripted browser walkthrough (see TEST_REPORT.md). Tests do not measure
-BGE-M3 or Ollama answer quality; use the evaluation tool and manual review for that.
-Chunks are fixed 1,200-character windows that can split words. AI jobs are held in
-server memory: a job running when the server restarts is lost and its audit entry is
-marked as interrupted, while finished results remain in the audit trail. Approving or rejecting
-findings, checklist tracking, report export, persona summaries, real identity management
-and database migrations are not implemented yet.
+- `backend/app/` — API, document store/import, retrieval and indexing, AI workflows,
+  version comparison, crawler, and evaluation commands.
+- `frontend/app/src/` — React pages, shared UI, API client, and client-side tests.
+- `frontend/app/dist/` — committed frontend build served by the backend.
+- `datasets/` — official-source registry, evaluation question set, bundled evaluation
+  PDF, and dataset notes.
+- `tests/` — backend tests and synthetic-only fixtures.
+- `data/` — local database, downloaded model, index, and reports; generated at runtime
+  and excluded from version control.
+
+## Limitations and future scope
+
+This is a local development prototype, not a production compliance platform. It has no
+real identity provider, role provisioning, automated regulatory refresh, OCR, reliable
+table extraction, database migration framework, approval/rejection workflow, checklist
+tracking, or report export. Search uses fixed 1,200-character windows that may split
+words. Retrieved excerpts can miss relevant clauses, and PDF text extraction may not
+preserve complex layouts. AI jobs run one at a time in server memory; in-progress jobs
+are lost on restart. Automated tests do not establish real-world model quality or legal
+accuracy.
+
+Practical next steps include production identity and authorization, schema migrations,
+durable job processing, reviewer approval and export, improved OCR/table handling, and
+monitored regulatory-source updates. Commercially, possible future models include
+per-seat or organization subscriptions, private/on-premise deployments, and paid
+document-review services. These are product hypotheses, not current billing, customer
+traction, or validated market demand. The current value proposition is a local,
+inspectable evidence trail that can reduce manual document searching and help teams
+prepare faster, better-grounded reviews.
