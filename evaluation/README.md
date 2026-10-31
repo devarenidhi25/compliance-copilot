@@ -10,7 +10,7 @@ are wired in later commits.
 | Pillar | Purpose | Status |
 | --- | --- | --- |
 | **Evaluation** | Metrics and reports (retrieval, RAG, CAG context layer) | Scaffold + schemas (commit 1); harnesses follow |
-| **Validation** | Batch checks that quotes and AI items match store rules | Planned (`evaluation/harness/validation.py`) |
+| **Validation** | Batch checks that quotes and AI items match store rules | `python -m evaluation.run_validation` |
 | **Experimentation** | YAML-defined sweeps writing to `evaluation/reports/` | Planned (`evaluation/run_experiment.py`) |
 
 ## Terminology

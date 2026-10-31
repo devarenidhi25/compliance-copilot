@@ -1,0 +1,167 @@
+{
+  "description": "Synthetic citation and schema validation cases (no live model).",
+  "cases": [
+    {
+      "id": "valid_regulatory_quote",
+      "task": "qa",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["The SYNTHETIC identity requirement must be verified annually by staff."]
+        }
+      ],
+      "item": {
+        "statement": "Identity must be verified annually.",
+        "citations": [
+          {
+            "chunk_index": 0,
+            "quote": "SYNTHETIC identity requirement must be verified annually by staff"
+          }
+        ]
+      },
+      "expect_pass": true
+    },
+    {
+      "id": "quote_not_in_allowed_chunks",
+      "task": "qa",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["The SYNTHETIC identity requirement must be verified annually by staff."]
+        }
+      ],
+      "allowed_chunk_indices": [99],
+      "item": {
+        "statement": "Identity must be verified annually.",
+        "citations": [
+          {
+            "chunk_index": 0,
+            "quote": "SYNTHETIC identity requirement must be verified annually by staff"
+          }
+        ]
+      },
+      "expect_pass": false,
+      "reason_contains": "not provided"
+    },
+    {
+      "id": "quote_too_short",
+      "task": "qa",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["The SYNTHETIC identity requirement must be verified annually by staff."]
+        }
+      ],
+      "item": {
+        "statement": "Short quote test.",
+        "citations": [{"chunk_index": 0, "quote": "SYNTHETIC"}]
+      },
+      "expect_pass": false,
+      "reason_contains": "12 characters"
+    },
+    {
+      "id": "gap_requires_internal_cite",
+      "task": "gap_analysis",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["Regulatory SYNTHETIC control text requires documented customer identification steps."]
+        },
+        {
+          "kind": "internal",
+          "title": "SYNTHETIC validation internal",
+          "pages": ["Internal SYNTHETIC policy describes identification steps for new customers."]
+        }
+      ],
+      "item": {
+        "statement": "Only regulatory cited.",
+        "assessment": "POTENTIAL_GAP",
+        "citations": [
+          {
+            "chunk_index": 0,
+            "quote": "Regulatory SYNTHETIC control text requires documented customer identification steps"
+          }
+        ]
+      },
+      "expect_pass": false,
+      "reason_contains": "regulatory and one internal"
+    },
+    {
+      "id": "gap_valid_dual_cite",
+      "task": "gap_analysis",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["Regulatory SYNTHETIC control text requires documented customer identification steps."]
+        },
+        {
+          "kind": "internal",
+          "title": "SYNTHETIC validation internal",
+          "pages": ["Internal SYNTHETIC policy describes identification steps for new customers."]
+        }
+      ],
+      "item": {
+        "statement": "Internal policy appears to address identification.",
+        "assessment": "APPEARS_ADDRESSED",
+        "citations": [
+          {
+            "document_index": 0,
+            "chunk_index": 0,
+            "quote": "Regulatory SYNTHETIC control text requires documented customer identification steps"
+          },
+          {
+            "document_index": 1,
+            "chunk_index": 0,
+            "quote": "Internal SYNTHETIC policy describes identification steps for new customers"
+          }
+        ]
+      },
+      "expect_pass": true
+    },
+    {
+      "id": "gap_invalid_assessment",
+      "task": "gap_analysis",
+      "organization": "alpha",
+      "documents": [
+        {
+          "kind": "regulatory",
+          "title": "SYNTHETIC validation reg",
+          "pages": ["Regulatory SYNTHETIC control text requires documented customer identification steps."]
+        },
+        {
+          "kind": "internal",
+          "title": "SYNTHETIC validation internal",
+          "pages": ["Internal SYNTHETIC policy describes identification steps for new customers."]
+        }
+      ],
+      "item": {
+        "statement": "Assessment label wrong.",
+        "assessment": "NOT_A_REAL_LABEL",
+        "citations": [
+          {
+            "document_index": 0,
+            "chunk_index": 0,
+            "quote": "Regulatory SYNTHETIC control text requires documented customer identification steps"
+          },
+          {
+            "document_index": 1,
+            "chunk_index": 0,
+            "quote": "Internal SYNTHETIC policy describes identification steps for new customers"
+          }
+        ]
+      },
+      "expect_pass": false,
+      "reason_contains": "assessment"
+    }
+  ]
+}
