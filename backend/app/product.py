@@ -31,7 +31,7 @@ from sqlalchemy import text
 
 from .ai import generate
 from .compare import diff_hunks, order_versions, stored_pages
-from .focus import add_focus
+from .cag import apply_context_layer
 from .retrieval import RetrievalError
 
 ROLES = {'compliance_officer':'Compliance Officer', 'legal':'Legal', 'risk':'Risk', 'executive':'Executive'}
@@ -179,7 +179,7 @@ class JobRunner:
             # Answer-first focus: optional, validated, and never fatal to the verified result.
             job['stage'] = 'summarising'
             focus_started = time.monotonic()
-            result = add_focus(result, job['question'])
+            result = apply_context_layer(result, job['question'])
             result['focus_seconds'] = round(time.monotonic() - focus_started, 1)
             result['audit_id'] = job['audit_id']
             job['result'], job['state'], job['stage'] = result, 'completed', 'completed'

@@ -65,11 +65,10 @@ Comnet does **not** ship a separate “CAG model” or cache-augmented weights. 
 evaluation and docs, **CAG** means the **context layer** on top of validated RAG output:
 
 1. **Fixed evidence window** — whatever survived `fit_budget` (trimmed, ranked excerpts).
-2. **Focus pass** — `backend/app/focus.py`: after citations pass validation, an optional
-   second Ollama call builds an answer-first summary from **verified statements only**
-   (`AI_FOCUS`, default on). Output is validated (highlights, key phrases); failures are non-fatal.
-
-Future commits in `evaluation/` will measure RAG and this CAG layer separately.
+2. **Focus pass** — after citations pass validation, an optional second Ollama call builds
+   an answer-first summary from **verified statements only** (`AI_FOCUS`, default on).
+   Implementation: `backend/app/focus.py`; product entry point: `backend/app/cag.py`
+   (`apply_context_layer`). Output is validated (highlights, key phrases); failures are non-fatal.
 
 ## What evaluation can and cannot claim
 
