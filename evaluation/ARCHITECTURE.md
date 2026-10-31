@@ -79,7 +79,7 @@ and ``python -m evaluation.run_experiment evaluation/experiments/rag_qa_mock.yam
 | --- | --- |
 | Page in top-k (LODRE JSON gold) | Table understanding |
 | Hit@k, MRR@k (existing CLI) | Full-document recall |
-| P/R/F1@k (planned in `evaluation/metrics`) | Legal correctness |
+| P/R/F1@k, nDCG@k (`evaluation/metrics`) | Legal correctness |
 | Citation accept/reject rate (RAG harness) | Perplexity from Ollama chat API |
 | Comparison diff coverage | OCR quality |
 

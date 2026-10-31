@@ -56,7 +56,7 @@ def recall_at_k(retrieved_lists, relevant_lists, k):
     total = 0.0
     for retrieved, relevant in zip(retrieved_lists, relevant_lists, strict=True):
         hits, _, gold_len = _overlap_counts(retrieved, relevant, k)
-        total += hits / gold_len if gold_len else 0.0
+        total += min(1.0, hits / gold_len) if gold_len else 0.0
     return total / len(retrieved_lists)
 
 
@@ -71,7 +71,7 @@ def f1_at_k(retrieved_lists, relevant_lists, k):
             scores.append(0.0)
             continue
         precision = hits / top_len
-        recall = hits / gold_len
+        recall = min(1.0, hits / gold_len)
         if precision + recall == 0:
             scores.append(0.0)
         else:

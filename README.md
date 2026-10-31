@@ -229,7 +229,8 @@ on verified output (`backend/app/cag.py`, same Ollama model as RAG).
 | `python -m evaluation.run_rag` | Mock RAG + CAG smoke (no live Ollama) |
 | `python -m evaluation.run_experiment evaluation/experiments/rag_qa_mock.yaml` | Multi-step offline sweep |
 
-Schemas: `evaluation/schemas/`. Run artifacts: `evaluation/reports/` (gitignored).
+Schemas: `evaluation/schemas/`. **Measured values:** [`evaluation/RESULTS.md`](evaluation/RESULTS.md).
+Run artifacts: `evaluation/reports/` (gitignored). Architecture doc: [`docs/SOLUTION_AND_EVALUATION.md`](docs/SOLUTION_AND_EVALUATION.md).
 Future generation gold sets: `datasets/eval/rag/`.
 
 ## Tests

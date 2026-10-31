@@ -1,0 +1,57 @@
+{
+  "run": {
+    "recorded_at": "2026-10-31T08:21:37.230767+00:00",
+    "git_commit": "9c136700b92de2f4f527d044f6bffb6d65677b8f"
+  },
+  "schema": "evaluation/schemas/validation_report.v1.json",
+  "suite": "D:\\PROJECTS\\compliance-copilot\\compliance-copilot\\evaluation\\fixtures\\validation\\suite.json",
+  "cases": [
+    {
+      "id": "valid_regulatory_quote",
+      "passed": true,
+      "accepted": true,
+      "expected_pass": true,
+      "reason": null
+    },
+    {
+      "id": "quote_not_in_allowed_chunks",
+      "passed": true,
+      "accepted": false,
+      "expected_pass": false,
+      "reason": "Citation references a chunk that was not provided as evidence"
+    },
+    {
+      "id": "quote_too_short",
+      "passed": true,
+      "accepted": false,
+      "expected_pass": false,
+      "reason": "Quotation failed source validation: Quote must be at least 12 characters of source text Model quote: \"SYNTHETIC\""
+    },
+    {
+      "id": "gap_requires_internal_cite",
+      "passed": true,
+      "accepted": false,
+      "expected_pass": false,
+      "reason": "Gap item must cite at least one regulatory and one internal excerpt"
+    },
+    {
+      "id": "gap_valid_dual_cite",
+      "passed": true,
+      "accepted": true,
+      "expected_pass": true,
+      "reason": null
+    },
+    {
+      "id": "gap_invalid_assessment",
+      "passed": true,
+      "accepted": false,
+      "expected_pass": false,
+      "reason": "Invalid or missing assessment label"
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 0,
+    "reasons": {}
+  }
+}

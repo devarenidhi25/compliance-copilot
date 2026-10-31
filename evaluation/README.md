@@ -4,6 +4,8 @@ This folder holds **offline** tooling for Comnet: measuring retrieval, validatin
 citations, running RAG/CAG smoke tests, and comparing experiment configs. It does
 not run at application startup.
 
+**Recorded numbers:** [`RESULTS.md`](RESULTS.md) · raw JSON: [`baselines/`](baselines/) · refresh: `python -m evaluation.record_baselines --all`
+
 ## Three pillars
 
 | Pillar | Purpose | Status |

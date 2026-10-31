@@ -1,0 +1,39 @@
+{
+  "run": {
+    "recorded_at": "2026-10-31T08:21:41.714083+00:00",
+    "git_commit": "9c136700b92de2f4f527d044f6bffb6d65677b8f"
+  },
+  "task": "qa",
+  "mock": true,
+  "models": {
+    "ollama_model": "qwen3:8b",
+    "retrieval_mode": "hybrid"
+  },
+  "generation_seconds": 0.0,
+  "evidence_excerpts": 1,
+  "items_proposed": 1,
+  "items_accepted": 1,
+  "items_rejected": 0,
+  "citation_acceptance_rate": 1.0,
+  "rejected_items": [],
+  "notes": [],
+  "schema": "evaluation/schemas/rag_report.v1.json",
+  "parameters": {
+    "chunks_per_document": 6,
+    "ollama_num_ctx": 16384,
+    "prompt_chars": 36864,
+    "ai_focus": true
+  },
+  "cag": {
+    "context_chars_before_budget": 1567,
+    "context_chars_after_budget": 1567,
+    "prompt_char_budget": 36864,
+    "context_trimmed": false,
+    "layer": "focus_on_verified_statements",
+    "focus_success": true,
+    "highlights_kept": 1,
+    "key_phrases_kept": 1,
+    "key_phrases_offered": 1,
+    "focus_seconds": null
+  }
+}

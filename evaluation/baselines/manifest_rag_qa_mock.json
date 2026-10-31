@@ -1,0 +1,33 @@
+{
+  "run": {
+    "recorded_at": "2026-10-31T08:02:04.041868+00:00",
+    "git_commit": "9c136700b92de2f4f527d044f6bffb6d65677b8f",
+    "machine_note": "Windows CPU, local corpus after PDF ingest",
+    "document_id": "5c9eda47-d3a8-4792-bdc4-5926f5c5fbbb"
+  },
+  "schema": "evaluation/schemas/experiment_manifest.v1.json",
+  "experiment_id": "rag_qa_mock",
+  "description": "Offline smoke \u2014 validation fixtures plus mock RAG and CAG context metrics.",
+  "config_path": "evaluation\\experiments\\rag_qa_mock.yaml",
+  "started_at": "2026-10-31T07:59:26.255821+00:00",
+  "finished_at": "2026-10-31T07:59:27.505446+00:00",
+  "git_commit": "9c136700b92de2f4f527d044f6bffb6d65677b8f",
+  "perplexity": {
+    "available": false,
+    "reason": "Ollama chat does not expose token log-probabilities; use retrieval/RAG metrics instead."
+  },
+  "steps": [
+    {
+      "name": "citation_validation_suite",
+      "type": "validation",
+      "status": "success",
+      "report_path": "data\\eval-rag_qa_mock\\citation_validation_suite.json"
+    },
+    {
+      "name": "rag_cag_mock_smoke",
+      "type": "rag_mock",
+      "status": "success",
+      "report_path": "data\\eval-rag_qa_mock\\rag_cag_mock_smoke.json"
+    }
+  ]
+}
