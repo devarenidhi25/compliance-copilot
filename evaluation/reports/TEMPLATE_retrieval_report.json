@@ -1,0 +1,21 @@
+{
+  "schema": "evaluation/schemas/retrieval_report.v1.json",
+  "document_id": null,
+  "k": 6,
+  "questions_file": "datasets/eval/lodr_master_circular.json",
+  "models": {
+    "embedding": "BAAI/bge-m3",
+    "retrieval_modes": ["bm25", "semantic", "hybrid"]
+  },
+  "modes": {
+    "bm25": {
+      "available": true,
+      "hit@6": null,
+      "mrr@6": null,
+      "precision@6": null,
+      "recall@6": null,
+      "f1@6": null,
+      "questions": []
+    }
+  }
+}

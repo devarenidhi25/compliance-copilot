@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comnet/evaluation/validation_report.v1.json",
+  "title": "Citation and schema validation batch report",
+  "type": "object",
+  "required": ["cases", "summary"],
+  "properties": {
+    "schema": { "const": "evaluation/schemas/validation_report.v1.json" },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "reasons": { "type": "object", "additionalProperties": { "type": "integer" } }
+      }
+    }
+  }
+}

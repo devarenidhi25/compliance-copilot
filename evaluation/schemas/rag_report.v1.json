@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comnet/evaluation/rag_report.v1.json",
+  "title": "RAG end-to-end evaluation report",
+  "type": "object",
+  "required": ["task", "models"],
+  "properties": {
+    "schema": { "const": "evaluation/schemas/rag_report.v1.json" },
+    "task": { "enum": ["qa", "comparison", "gap_analysis", "checklist"] },
+    "mock": { "type": "boolean" },
+    "models": {
+      "type": "object",
+      "properties": {
+        "embedding": { "type": "string" },
+        "ollama_model": { "type": "string" },
+        "retrieval_mode": { "enum": ["bm25", "semantic", "hybrid"] }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "chunks_per_document": { "type": "integer" },
+        "ollama_num_ctx": { "type": "integer" },
+        "prompt_chars": { "type": "integer" },
+        "ai_focus": { "type": "boolean" }
+      }
+    },
+    "generation_seconds": { "type": "number" },
+    "citation_acceptance_rate": { "type": "number" },
+    "items_proposed": { "type": "integer" },
+    "items_accepted": { "type": "integer" },
+    "rejected_items": { "type": "array" },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "cag": {
+      "type": "object",
+      "description": "Context layer metrics (trimmed evidence + optional focus pass)",
+      "properties": {
+        "context_chars_before_budget": { "type": "integer" },
+        "context_chars_after_budget": { "type": "integer" },
+        "focus_success": { "type": "boolean" },
+        "focus_seconds": { "type": "number" }
+      }
+    }
+  }
+}

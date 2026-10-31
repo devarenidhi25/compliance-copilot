@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comnet/evaluation/retrieval_report.v1.json",
+  "title": "Retrieval evaluation report",
+  "type": "object",
+  "required": ["document_id", "k", "modes"],
+  "properties": {
+    "schema": { "const": "evaluation/schemas/retrieval_report.v1.json" },
+    "document_id": { "type": "string" },
+    "k": { "type": "integer", "minimum": 1 },
+    "questions_file": { "type": "string" },
+    "models": {
+      "type": "object",
+      "properties": {
+        "embedding": { "type": "string" },
+        "retrieval_modes": {
+          "type": "array",
+          "items": { "enum": ["bm25", "semantic", "hybrid"] }
+        }
+      }
+    },
+    "modes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["available"],
+        "properties": {
+          "available": { "type": "boolean" },
+          "reason": { "type": "string" },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {},
+                "rank": { "type": ["integer", "null"] },
+                "retrieved_pages": { "type": "array", "items": { "type": "integer" } }
+              }
+            }
+          }
+        },
+        "patternProperties": {
+          "^hit@\\d+$": { "type": "number" },
+          "^mrr@\\d+$": { "type": "number" },
+          "^precision@\\d+$": { "type": "number" },
+          "^recall@\\d+$": { "type": "number" },
+          "^f1@\\d+$": { "type": "number" }
+        }
+      }
+    }
+  }
+}

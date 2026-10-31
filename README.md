@@ -211,6 +211,16 @@ The evaluator reports hit@6 and MRR@6 per search mode against expected PDF pages
 Semantic/hybrid modes need the downloaded BGE-M3 model and a built index; the BM25
 baseline above is not a general quality or compliance metric.
 
+### Evaluation package
+
+Offline metrics, validation batches, and experiment configs live under
+[`evaluation/`](evaluation/README.md). Start with [`evaluation/ARCHITECTURE.md`](evaluation/ARCHITECTURE.md)
+for what the RAG pipeline actually includes (plain-text chunks, hybrid search,
+citation validation) and what it does not (OCR, structured tables, line-level Q&A index).
+Report JSON schemas are in `evaluation/schemas/`; run outputs go to `evaluation/reports/`
+(gitignored). Additional harnesses and metrics will call the same backend code as
+`eval_cli` without changing runtime product behavior.
+
 ## Tests
 
 Run the backend suite from the repository root:
@@ -233,6 +243,7 @@ The frontend unit tests and production type-check/build are run with the command
 - `frontend/app/dist/` — committed frontend build served by the backend.
 - `datasets/` — official-source registry, evaluation question set, bundled evaluation
   PDF, and dataset notes.
+- `evaluation/` — evaluation, validation, and experiment scaffolding, schemas, and reports.
 - `tests/` — backend tests and synthetic-only fixtures.
 - `data/` — local database, downloaded model, index, and reports; generated at runtime
   and excluded from version control.

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comnet/evaluation/experiment_manifest.v1.json",
+  "title": "Experiment run summary",
+  "type": "object",
+  "required": ["experiment_id", "steps"],
+  "properties": {
+    "schema": { "const": "evaluation/schemas/experiment_manifest.v1.json" },
+    "experiment_id": { "type": "string" },
+    "config_path": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "enum": ["success", "failed", "skipped"] },
+          "report_path": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      }
+    }
+  }
+}
