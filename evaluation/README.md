@@ -9,7 +9,7 @@ are wired in later commits.
 
 | Pillar | Purpose | Status |
 | --- | --- | --- |
-| **Evaluation** | Metrics and reports (retrieval, RAG, CAG context layer) | Scaffold + schemas (commit 1); harnesses follow |
+| **Evaluation** | Metrics and reports (retrieval, RAG, CAG context layer) | Retrieval + RAG/CAG mock harnesses |
 | **Validation** | Batch checks that quotes and AI items match store rules | `python -m evaluation.run_validation` |
 | **Experimentation** | YAML-defined sweeps writing to `evaluation/reports/` | Planned (`evaluation/run_experiment.py`) |
 
@@ -17,8 +17,10 @@ are wired in later commits.
 
 - **RAG** — Hybrid retrieval → evidence prompt → Ollama → citation validation (`backend/app/ai.py`).
 - **CAG (here)** — **C**ontext layer: trimmed evidence window plus optional **focus**
-  pass on verified statements only (`backend/app/focus.py`). Same Ollama model as RAG;
-  not a separate embedding or weight file.
+  pass on verified statements only (`backend/app/cag.py` → `focus.py`). Same Ollama
+  model as RAG; not a separate embedding or weight file.
+
+Mock end-to-end: ``python -m evaluation.run_rag`` (RAG + context metrics).
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for ingestion limits (no OCR/tables), chunking,
 and when line-aligned diffs are used.
