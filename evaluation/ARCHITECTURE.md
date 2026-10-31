@@ -70,6 +70,9 @@ evaluation and docs, **CAG** means the **context layer** on top of validated RAG
    Implementation: `backend/app/focus.py`; product entry point: `backend/app/cag.py`
    (`apply_context_layer`). Output is validated (highlights, key phrases); failures are non-fatal.
 
+Offline checks: ``python -m evaluation.run_validation``, ``python -m evaluation.run_rag``,
+and ``python -m evaluation.run_experiment evaluation/experiments/rag_qa_mock.yaml``.
+
 ## What evaluation can and cannot claim
 
 | Measurable today | Not measurable without new data or features |

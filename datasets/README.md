@@ -188,6 +188,7 @@ and hybrid search (see ``evaluation.harness.retrieval`` or ``python -m evaluatio
 Measured BM25 baseline on this file: hit@6 0.833, MRR@6 0.750 (misses: market-rumour
 verification and loan defaults, where the questions share few words with the source text).
 Semantic and hybrid figures require the downloaded BGE-M3 model; record them on your machine.
+End-to-end RAG gold sets may be added under `datasets/eval/rag/` (see that README).
 
 The circular covers listed-company obligations, not KYC/AML. To evaluate the KYC
 focus of the project, upload the official RBI KYC Master Direction PDF (download

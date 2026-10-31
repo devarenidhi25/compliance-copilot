@@ -215,13 +215,22 @@ or compliance metric.
 
 ### Evaluation package
 
-Offline metrics, validation batches, and experiment configs live under
-[`evaluation/`](evaluation/README.md). Start with [`evaluation/ARCHITECTURE.md`](evaluation/ARCHITECTURE.md)
-for what the RAG pipeline actually includes (plain-text chunks, hybrid search,
-citation validation) and what it does not (OCR, structured tables, line-level Q&A index).
-Report JSON schemas are in `evaluation/schemas/`; run outputs go to `evaluation/reports/`
-(gitignored). Additional harnesses and metrics will call the same backend code as
-`eval_cli` without changing runtime product behavior.
+Offline **evaluation**, **validation**, and **experimentation** live under
+[`evaluation/`](evaluation/README.md). Read [`evaluation/ARCHITECTURE.md`](evaluation/ARCHITECTURE.md)
+for what RAG includes (plain-text chunks, hybrid search, citation validation) and what
+it does not (OCR, structured tables, line-level Q&A index). **RAG** is retrieve →
+generate → validate (`backend/app/ai.py`); **CAG** here is the optional context layer
+on verified output (`backend/app/cag.py`, same Ollama model as RAG).
+
+| Command | Purpose |
+| --- | --- |
+| `python -m evaluation.run_retrieval` | Page retrieval metrics (hit/MRR/P/R/F1@k) |
+| `python -m evaluation.run_validation` | Batch citation/schema fixtures |
+| `python -m evaluation.run_rag` | Mock RAG + CAG smoke (no live Ollama) |
+| `python -m evaluation.run_experiment evaluation/experiments/rag_qa_mock.yaml` | Multi-step offline sweep |
+
+Schemas: `evaluation/schemas/`. Run artifacts: `evaluation/reports/` (gitignored).
+Future generation gold sets: `datasets/eval/rag/`.
 
 ## Tests
 
@@ -240,7 +249,7 @@ The frontend unit tests and production type-check/build are run with the command
 ## Project structure
 
 - `backend/app/` — API, document store/import, retrieval and indexing, AI workflows,
-  version comparison, crawler, and evaluation commands.
+  CAG context layer, version comparison, crawler, and evaluation CLI shims.
 - `frontend/app/src/` — React pages, shared UI, API client, and client-side tests.
 - `frontend/app/dist/` — committed frontend build served by the backend.
 - `datasets/` — official-source registry, evaluation question set, bundled evaluation

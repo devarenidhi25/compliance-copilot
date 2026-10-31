@@ -2,8 +2,7 @@
 
 This folder holds **offline** tooling for Comnet: measuring retrieval, validating
 citations, running RAG/CAG smoke tests, and comparing experiment configs. It does
-not run at application startup and does not change product behavior until harnesses
-are wired in later commits.
+not run at application startup.
 
 ## Three pillars
 
@@ -50,6 +49,14 @@ Gold questions: `datasets/eval/lodr_master_circular.json` (upload the bundled PD
 
 Per mode: **hit@k**, **MRR@k**, **precision@k**, **recall@k**, **F1@k**, **nDCG@k** (in JSON reports).
 
+## Validation and RAG/CAG smoke
+
+```powershell
+.\.venv\Scripts\python.exe -m evaluation.run_validation
+.\.venv\Scripts\python.exe -m evaluation.run_rag
+.\.venv\Scripts\python.exe -m evaluation.run_cag
+```
+
 ## Models and parameters to record in every report
 
 | Parameter | Env / default |
@@ -64,6 +71,7 @@ Per mode: **hit@k**, **MRR@k**, **precision@k**, **recall@k**, **F1@k**, **nDCG@
 ## Experiments
 
 Author configs under `evaluation/experiments/` (see [experiments/README.md](experiments/README.md)).
+
 ```powershell
 .\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\rag_qa_mock.yaml
 .\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\lodr_retrieval.yaml
@@ -73,6 +81,14 @@ Use a **single** server worker while indexing; do not write to Chroma from a sec
 
 ## Perplexity and other LM metrics
 
-Optional **perplexity** is not available from the Ollama chat API. A future
-`evaluation/metrics/lm.py` may support held-out text via Hugging Face models behind an
-explicit flag; such scores are experimental and are not compliance metrics.
+**Perplexity** is not available from the Ollama chat API. `evaluation/metrics/lm.py`
+records status in experiment manifests; setting `EVAL_PERPLEXITY=1` is reserved for a
+future Hugging Face held-out text path. Such scores are experimental and are not
+compliance metrics.
+
+## Tests
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+.\.venv\Scripts\python.exe -m pytest tests/test_evaluation_metrics.py tests/test_evaluation_validation.py tests/test_evaluation_rag.py tests/test_evaluation_experiment.py tests/test_cag.py -q
+```

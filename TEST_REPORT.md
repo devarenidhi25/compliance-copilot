@@ -51,6 +51,10 @@ Added in this round:
 - **Hardening:** sandboxed HTML sources, `nosniff`, database indexes, foreign keys.
 - **Evaluation:** hit@k/MRR@k computation, unavailable-mode reporting, and a check
   that the bundled question file matches the bundled PDF's hash.
+- **`evaluation/` package:** ranking/classification metrics (P/R/F1@k), retrieval harness
+  (`evaluation.run_retrieval`), validation batch (`evaluation.run_validation`), mock
+  RAG/CAG smoke (`evaluation.run_rag`), CAG module tests (`tests/test_cag.py`), and
+  experiment runner (`evaluation.run_experiment` on `rag_qa_mock.yaml`).
 
 ## End-to-end checks on the real SEBI LODR Master Circular (291 pages)
 
@@ -65,8 +69,10 @@ and reported. For four selected documents the AI prompt is about 20,000 characte
 (previously about 58,000); the line-aligned diff of the full circular takes 0.24 s.
 
 Retrieval evaluation (`datasets/eval/lodr_master_circular.json`, 12 questions),
-BM25 only: **hit@6 0.833, MRR@6 0.750**. Semantic and hybrid scores need the
-BGE-M3 weights and should be recorded on a machine that has them.
+BM25 only: **hit@6 0.833, MRR@6 0.750**. The harness also reports **precision@6,
+recall@6, and F1@6**. Semantic and hybrid scores need the BGE-M3 weights and should
+be recorded on a machine that has them (`python -m evaluation.run_experiment`
+with `lodr_retrieval.yaml`).
 
 ## Live run on a team machine (Windows, CPU only)
 
