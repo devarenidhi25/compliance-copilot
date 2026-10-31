@@ -183,11 +183,11 @@ After uploading the circular and syncing the index:
 .venv/bin/python -m backend.app.eval_cli --modes bm25 --report data/eval-report.json
 ```
 
-It prints hit@6 (share of questions with a correct page in the top six results)
-and MRR@6 for each of BM25, semantic and hybrid search. Measured BM25 baseline on
-this file: hit@6 0.833, MRR@6 0.750 (misses: market-rumour verification and loan
-defaults, where the questions share few words with the source text). Semantic and
-hybrid figures require the downloaded BGE-M3 model; record them on your machine.
+It prints hit@6, MRR@6, precision@6, recall@6, and F1@6 for each of BM25, semantic,
+and hybrid search (see ``evaluation.harness.retrieval`` or ``python -m evaluation.run_retrieval``).
+Measured BM25 baseline on this file: hit@6 0.833, MRR@6 0.750 (misses: market-rumour
+verification and loan defaults, where the questions share few words with the source text).
+Semantic and hybrid figures require the downloaded BGE-M3 model; record them on your machine.
 
 The circular covers listed-company obligations, not KYC/AML. To evaluate the KYC
 focus of the project, upload the official RBI KYC Master Direction PDF (download

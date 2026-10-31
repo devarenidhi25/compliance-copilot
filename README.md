@@ -207,9 +207,11 @@ After uploading the bundled SEBI LODR circular and syncing its index, run the
 .\.venv\Scripts\python.exe -m backend.app.eval_cli --modes bm25 --report data\eval-report.json
 ```
 
-The evaluator reports hit@6 and MRR@6 per search mode against expected PDF pages.
-Semantic/hybrid modes need the downloaded BGE-M3 model and a built index; the BM25
-baseline above is not a general quality or compliance metric.
+The evaluator reports hit@6, MRR@6, precision@6, recall@6, and F1@6 per search mode
+against expected PDF pages. The same harness is available as
+``python -m evaluation.run_retrieval``. Semantic/hybrid modes need the downloaded
+BGE-M3 model and a built index; the BM25 baseline above is not a general quality
+or compliance metric.
 
 ### Evaluation package
 

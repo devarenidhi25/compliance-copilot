@@ -35,18 +35,18 @@ JSON Schema drafts live under `evaluation/schemas/`:
 Templates (committed): `evaluation/reports/TEMPLATE_*.json`.  
 Machine runs write under `evaluation/reports/<run-id>/` (gitignored).
 
-## Running retrieval evaluation (today)
+## Running retrieval evaluation
 
-Until harnesses move here, use the existing CLI from the repository root:
+From the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe -m backend.app.eval_cli
+.\.venv\Scripts\python.exe -m evaluation.run_retrieval
 .\.venv\Scripts\python.exe -m backend.app.eval_cli --modes bm25 --report data\eval-report.json
 ```
 
 Gold questions: `datasets/eval/lodr_master_circular.json` (upload the bundled PDF and sync the index first).
 
-Planned metrics per mode (in addition to hit@k and MRR@k): **precision@k**, **recall@k**, **F1@k**, **recall@1**.
+Per mode: **hit@k**, **MRR@k**, **precision@k**, **recall@k**, **F1@k**, **nDCG@k** (in JSON reports).
 
 ## Models and parameters to record in every report
 
