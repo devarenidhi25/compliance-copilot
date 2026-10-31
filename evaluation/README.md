@@ -11,7 +11,7 @@ are wired in later commits.
 | --- | --- | --- |
 | **Evaluation** | Metrics and reports (retrieval, RAG, CAG context layer) | Retrieval + RAG/CAG mock harnesses |
 | **Validation** | Batch checks that quotes and AI items match store rules | `python -m evaluation.run_validation` |
-| **Experimentation** | YAML-defined sweeps writing to `evaluation/reports/` | Planned (`evaluation/run_experiment.py`) |
+| **Experimentation** | YAML-defined sweeps writing to `evaluation/reports/` | `python -m evaluation.run_experiment` |
 
 ## Terminology
 
@@ -64,9 +64,8 @@ Per mode: **hit@k**, **MRR@k**, **precision@k**, **recall@k**, **F1@k**, **nDCG@
 ## Experiments
 
 Author configs under `evaluation/experiments/` (see [experiments/README.md](experiments/README.md)).
-Run the experiment CLI once implemented:
-
 ```powershell
+.\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\rag_qa_mock.yaml
 .\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\lodr_retrieval.yaml
 ```
 

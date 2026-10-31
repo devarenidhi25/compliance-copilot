@@ -1,0 +1,8 @@
+experiment_id: rag_qa_mock
+description: Offline smoke — validation fixtures plus mock RAG and CAG context metrics.
+steps:
+  - name: citation_validation_suite
+    type: validation
+    suite: evaluation/fixtures/validation/suite.json
+  - name: rag_cag_mock_smoke
+    type: rag_mock

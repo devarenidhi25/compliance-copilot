@@ -1,0 +1,10 @@
+experiment_id: lodr_retrieval
+description: Retrieval metrics on the bundled LODR question set (requires uploaded PDF and index).
+steps:
+  - name: retrieval_all_modes
+    type: retrieval
+    questions: datasets/eval/lodr_master_circular.json
+    modes:
+      - bm25
+      - semantic
+      - hybrid

@@ -1,0 +1,18 @@
+{
+  "schema": "evaluation/schemas/experiment_manifest.v1.json",
+  "experiment_id": "example",
+  "config_path": "evaluation/experiments/rag_qa_mock.yaml",
+  "git_commit": null,
+  "perplexity": {
+    "available": false,
+    "reason": "Ollama chat does not expose token log-probabilities; use retrieval/RAG metrics instead."
+  },
+  "steps": [
+    {
+      "name": "citation_validation_suite",
+      "type": "validation",
+      "status": "success",
+      "report_path": "evaluation/reports/20260101T000000Z_rag_qa_mock/citation_validation_suite.json"
+    }
+  ]
+}

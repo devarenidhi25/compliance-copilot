@@ -1,23 +1,32 @@
 # Experiment configs
 
-YAML files in this directory describe repeatable evaluation sweeps. The experiment
-runner (added in a later commit) will:
+YAML (or JSON) files describe repeatable evaluation sweeps. The runner:
 
-1. Load the config from the repository root.
-2. Execute each step (retrieval, validation mock, RAG mock, …).
-3. Write JSON under `evaluation/reports/<timestamp>/` plus a manifest.
+1. Loads the config from the repository root.
+2. Executes each step (retrieval, validation, RAG mock, …).
+3. Writes JSON under `evaluation/reports/<timestamp>_<id>/` plus `manifest.json`.
+
+## Run
+
+```powershell
+.\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\rag_qa_mock.yaml
+.\.venv\Scripts\python.exe -m evaluation.run_experiment evaluation\experiments\lodr_retrieval.yaml
+```
+
+`lodr_retrieval.yaml` needs the evaluation PDF uploaded and the index synced on your machine.
+`rag_qa_mock.yaml` is fully offline (validation + mock RAG/CAG).
 
 ## Conventions
 
 - Paths in configs are relative to the **repository root**.
-- Prefer **`mock: true`** steps in CI; **`live: true`** only on a machine with Ollama, the embedding model, and an indexed corpus.
-- Record `git` commit hash in the manifest when the runner supports it.
+- **`mock`** steps need no Ollama; **`retrieval`** steps use `data/corpus.sqlite3` (or `COPILOT_DB`).
+- The manifest records `git_commit` when git is available.
 
-## Planned examples
+## Bundled configs
 
-| File | Intent |
+| File | Steps |
 | --- | --- |
-| `lodr_retrieval.yaml` | BM25 / semantic / hybrid on LODR question set |
-| `rag_qa_mock.yaml` | Mock Ollama Q&A smoke test |
+| `lodr_retrieval.yaml` | BM25, semantic, hybrid on LODR questions |
+| `rag_qa_mock.yaml` | Validation suite + mock RAG/CAG smoke |
 
-Configs will be added alongside `evaluation/run_experiment.py`.
+PyYAML is required for `.yaml` configs (already present via project dependencies).
